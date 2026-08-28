@@ -4,6 +4,11 @@
       "filename" : "front.png",
       "idiom" : "universal",
       "scale" : "1x"
+    },
+    {
+      "filename" : "front@2x.png",
+      "idiom" : "universal",
+      "scale" : "2x"
     }
   ],
   "info" : {
