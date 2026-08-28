@@ -1,6 +1,17 @@
 import KinoPubBackend
 import SwiftUI
 
+private enum TVBrowseLayout {
+  static let horizontalInset: CGFloat = 72
+  static let posterWidth: CGFloat = 300
+  static let posterHeight: CGFloat = 450
+  static let posterSpacing: CGFloat = 42
+  static let rowSpacing: CGFloat = 58
+  static let columns = Array(
+    repeating: GridItem(.fixed(posterWidth), spacing: posterSpacing, alignment: .top),
+    count: 5)
+}
+
 struct TVRootView: View {
   var body: some View {
     TabView {
@@ -24,6 +35,24 @@ struct TVRootView: View {
 }
 
 @MainActor
+private enum TVHomeShelf: Hashable {
+  case freshMovies
+  case popularMovies
+  case freshSeries
+
+  var request: (shortcut: MediaShortcut, type: MediaType) {
+    switch self {
+    case .freshMovies:
+      return (.fresh, .movie)
+    case .popularMovies:
+      return (.popular, .movie)
+    case .freshSeries:
+      return (.fresh, .serial)
+    }
+  }
+}
+
+@MainActor
 private final class TVHomeModel: ObservableObject {
   @Published var continueWatching: [MediaItem] = []
   @Published var freshMovies: [MediaItem] = []
@@ -32,6 +61,8 @@ private final class TVHomeModel: ObservableObject {
   @Published var featured: MediaItem?
   @Published var errorMessage: String?
   @Published var isLoading = false
+  private var paginations: [TVHomeShelf: Pagination] = [:]
+  private var loadingShelves = Set<TVHomeShelf>()
 
   func load(session: TVSession) async {
     guard !isLoading else { return }
@@ -40,19 +71,65 @@ private final class TVHomeModel: ObservableObject {
 
     do {
       async let history = session.fetchHistory()
-      async let freshMovies = session.fetchShelf(shortcut: .fresh, type: .movie)
-      async let popularMovies = session.fetchShelf(shortcut: .popular, type: .movie)
-      async let freshSeries = session.fetchShelf(shortcut: .fresh, type: .serial)
+      async let freshMovies = session.fetchShelfPage(shortcut: .fresh, type: .movie, page: 1)
+      async let popularMovies = session.fetchShelfPage(shortcut: .popular, type: .movie, page: 1)
+      async let freshSeries = session.fetchShelfPage(shortcut: .fresh, type: .serial, page: 1)
 
       let values = try await (history, freshMovies, popularMovies, freshSeries)
       self.continueWatching = Self.unique(values.0.map(\.item))
-      self.freshMovies = values.1
-      self.popularMovies = values.2
-      self.freshSeries = values.3
-      featured = continueWatching.first ?? values.1.first ?? values.2.first
+      self.freshMovies = Self.unique(values.1.items)
+      self.popularMovies = Self.unique(values.2.items)
+      self.freshSeries = Self.unique(values.3.items)
+      paginations[.freshMovies] = values.1.pagination
+      paginations[.popularMovies] = values.2.pagination
+      paginations[.freshSeries] = values.3.pagination
+      featured = continueWatching.first ?? values.1.items.first ?? values.2.items.first
       errorMessage = nil
     } catch {
       errorMessage = error.localizedDescription
+    }
+  }
+
+  func loadMore(after item: MediaItem, shelf: TVHomeShelf, session: TVSession) async {
+    guard shouldLoadMore(after: item, in: shelf), !loadingShelves.contains(shelf),
+          let pagination = paginations[shelf], pagination.current < pagination.total else { return }
+
+    loadingShelves.insert(shelf)
+    defer { loadingShelves.remove(shelf) }
+
+    do {
+      let request = shelf.request
+      let data = try await session.fetchShelfPage(
+        shortcut: request.shortcut,
+        type: request.type,
+        page: pagination.current + 1)
+      setItems(Self.unique(items(for: shelf) + data.items), for: shelf)
+      paginations[shelf] = data.pagination
+      errorMessage = nil
+    } catch {
+      errorMessage = error.localizedDescription
+    }
+  }
+
+  private func shouldLoadMore(after item: MediaItem, in shelf: TVHomeShelf) -> Bool {
+    let items = items(for: shelf)
+    guard let index = items.firstIndex(where: { $0.id == item.id }) else { return false }
+    return index >= max(items.count - 5, 0)
+  }
+
+  private func items(for shelf: TVHomeShelf) -> [MediaItem] {
+    switch shelf {
+    case .freshMovies: freshMovies
+    case .popularMovies: popularMovies
+    case .freshSeries: freshSeries
+    }
+  }
+
+  private func setItems(_ items: [MediaItem], for shelf: TVHomeShelf) {
+    switch shelf {
+    case .freshMovies: freshMovies = items
+    case .popularMovies: popularMovies = items
+    case .freshSeries: freshSeries = items
     }
   }
 
@@ -79,9 +156,15 @@ struct TVHomeView: View {
           if !model.continueWatching.isEmpty {
             TVShelf(title: "Continue watching", items: model.continueWatching, featured: $model.featured)
           }
-          TVShelf(title: "Fresh movies", items: model.freshMovies, featured: $model.featured)
-          TVShelf(title: "Popular now", items: model.popularMovies, featured: $model.featured)
-          TVShelf(title: "Fresh series", items: model.freshSeries, featured: $model.featured)
+          TVShelf(title: "Fresh movies", items: model.freshMovies, featured: $model.featured) { item in
+            Task { await model.loadMore(after: item, shelf: .freshMovies, session: session) }
+          }
+          TVShelf(title: "Popular now", items: model.popularMovies, featured: $model.featured) { item in
+            Task { await model.loadMore(after: item, shelf: .popularMovies, session: session) }
+          }
+          TVShelf(title: "Fresh series", items: model.freshSeries, featured: $model.featured) { item in
+            Task { await model.loadMore(after: item, shelf: .freshSeries, session: session) }
+          }
 
           if let error = model.errorMessage {
             TVInlineError(message: error) {
@@ -171,24 +254,36 @@ private struct TVShelf: View {
   let title: String
   let items: [MediaItem]
   @Binding var featured: MediaItem?
+  let didFocusItem: (MediaItem) -> Void
+
+  init(title: String,
+       items: [MediaItem],
+       featured: Binding<MediaItem?>,
+       didFocusItem: @escaping (MediaItem) -> Void = { _ in }) {
+    self.title = title
+    self.items = items
+    _featured = featured
+    self.didFocusItem = didFocusItem
+  }
 
   var body: some View {
     if !items.isEmpty {
       VStack(alignment: .leading, spacing: 22) {
         Text(title)
-          .font(.title2.weight(.bold))
-          .padding(.horizontal, 80)
+          .font(.title.weight(.bold))
+          .padding(.horizontal, TVBrowseLayout.horizontalInset)
 
         ScrollView(.horizontal, showsIndicators: false) {
-          LazyHStack(spacing: 34) {
+          LazyHStack(alignment: .top, spacing: TVBrowseLayout.posterSpacing) {
             ForEach(items) { item in
               TVPosterLink(item: item) {
                 featured = item
+                didFocusItem(item)
               }
             }
           }
-          .padding(.horizontal, 80)
-          .padding(.vertical, 18)
+          .padding(.horizontal, TVBrowseLayout.horizontalInset)
+          .padding(.vertical, 26)
         }
       }
     }
@@ -199,6 +294,12 @@ private struct TVPosterLink: View {
   let item: MediaItem
   let didFocus: () -> Void
   @FocusState private var isFocused: Bool
+
+  init(item: MediaItem,
+       didFocus: @escaping () -> Void = {}) {
+    self.item = item
+    self.didFocus = didFocus
+  }
 
   var body: some View {
     NavigationLink(value: item.id) {
@@ -230,19 +331,19 @@ struct TVPosterCard: View {
           }
         }
       }
-      .frame(width: 230, height: 345)
+      .frame(width: TVBrowseLayout.posterWidth, height: TVBrowseLayout.posterHeight)
       .clipped()
 
       Text(item.localizedTitle)
-        .font(.headline)
-        .lineLimit(1)
-        .frame(width: 230, alignment: .leading)
+        .font(.title3.weight(.semibold))
+        .lineLimit(2)
+        .frame(width: TVBrowseLayout.posterWidth, height: 68, alignment: .topLeading)
 
       Text(item.year.description)
-        .font(.subheadline)
+        .font(.body)
         .foregroundStyle(.secondary)
     }
-    .frame(width: 230, alignment: .leading)
+    .frame(width: TVBrowseLayout.posterWidth, alignment: .leading)
   }
 }
 
@@ -250,14 +351,53 @@ struct TVPosterCard: View {
 private final class TVCatalogModel: ObservableObject {
   @Published var items: [MediaItem] = []
   @Published var errorMessage: String?
+  @Published var isLoading = false
+  @Published var isLoadingMore = false
+  @Published var pagination: Pagination?
 
   func load(type: MediaType, session: TVSession) async {
+    guard !isLoading else { return }
+    isLoading = true
+    defer { isLoading = false }
+
     do {
-      items = try await session.fetchShelf(shortcut: .fresh, type: type)
+      let data = try await session.fetchShelfPage(shortcut: .fresh, type: type, page: 1)
+      items = Self.unique(data.items)
+      pagination = data.pagination
       errorMessage = nil
     } catch {
       errorMessage = error.localizedDescription
     }
+  }
+
+  func loadMore(after item: MediaItem, type: MediaType, session: TVSession) async {
+    guard shouldLoadMore(after: item), !isLoading, !isLoadingMore,
+          let pagination, pagination.current < pagination.total else { return }
+
+    isLoadingMore = true
+    defer { isLoadingMore = false }
+
+    do {
+      let data = try await session.fetchShelfPage(
+        shortcut: .fresh,
+        type: type,
+        page: pagination.current + 1)
+      items = Self.unique(items + data.items)
+      self.pagination = data.pagination
+      errorMessage = nil
+    } catch {
+      errorMessage = error.localizedDescription
+    }
+  }
+
+  private func shouldLoadMore(after item: MediaItem) -> Bool {
+    guard let index = items.firstIndex(where: { $0.id == item.id }) else { return false }
+    return index >= max(items.count - 5, 0)
+  }
+
+  private static func unique(_ items: [MediaItem]) -> [MediaItem] {
+    var seen = Set<Int>()
+    return items.filter { seen.insert($0.id).inserted }
   }
 }
 
@@ -270,15 +410,19 @@ struct TVCatalogView: View {
   var body: some View {
     NavigationStack {
       ScrollView {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 230), spacing: 36)], spacing: 50) {
+        LazyVGrid(columns: TVBrowseLayout.columns, spacing: TVBrowseLayout.rowSpacing) {
           ForEach(model.items) { item in
-            NavigationLink(value: item.id) {
-              TVPosterCard(item: item)
+            TVPosterLink(item: item) {
+              Task { await model.loadMore(after: item, type: type, session: session) }
             }
-            .buttonStyle(.card)
           }
         }
-        .padding(80)
+        .padding(.horizontal, TVBrowseLayout.horizontalInset)
+        .padding(.vertical, 46)
+
+        if model.isLoading || model.isLoadingMore {
+          TVPageProgress(pagination: model.pagination)
+        }
 
         if let error = model.errorMessage {
           TVInlineError(message: error) {
@@ -300,21 +444,62 @@ private final class TVSearchModel: ObservableObject {
   @Published var results: [MediaItem] = []
   @Published var errorMessage: String?
   @Published var isSearching = false
+  @Published var isLoadingMore = false
+  @Published var pagination: Pagination?
+  private var pagedQuery = ""
 
   func search(session: TVSession) async {
     let value = query.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !value.isEmpty else {
       results = []
+      pagination = nil
+      pagedQuery = ""
       return
     }
     isSearching = true
+    results = []
+    pagination = nil
+    pagedQuery = value
     defer { isSearching = false }
     do {
-      results = try await session.search(value)
+      let data = try await session.searchPage(value, page: 1)
+      guard query.trimmingCharacters(in: .whitespacesAndNewlines) == value else { return }
+      results = Self.unique(data.items)
+      pagination = data.pagination
       errorMessage = nil
     } catch {
       errorMessage = error.localizedDescription
     }
+  }
+
+  func loadMore(after item: MediaItem, session: TVSession) async {
+    guard shouldLoadMore(after: item), !isSearching, !isLoadingMore,
+          let pagination, pagination.current < pagination.total else { return }
+
+    let value = pagedQuery
+    guard !value.isEmpty else { return }
+    isLoadingMore = true
+    defer { isLoadingMore = false }
+
+    do {
+      let data = try await session.searchPage(value, page: pagination.current + 1)
+      guard pagedQuery == value else { return }
+      results = Self.unique(results + data.items)
+      self.pagination = data.pagination
+      errorMessage = nil
+    } catch {
+      errorMessage = error.localizedDescription
+    }
+  }
+
+  private func shouldLoadMore(after item: MediaItem) -> Bool {
+    guard let index = results.firstIndex(where: { $0.id == item.id }) else { return false }
+    return index >= max(results.count - 5, 0)
+  }
+
+  private static func unique(_ items: [MediaItem]) -> [MediaItem] {
+    var seen = Set<Int>()
+    return items.filter { seen.insert($0.id).inserted }
   }
 }
 
@@ -338,15 +523,19 @@ struct TVSearchView: View {
           .frame(maxWidth: .infinity)
           .padding(.top, 180)
         } else {
-          LazyVGrid(columns: [GridItem(.adaptive(minimum: 230), spacing: 36)], spacing: 50) {
+          LazyVGrid(columns: TVBrowseLayout.columns, spacing: TVBrowseLayout.rowSpacing) {
             ForEach(model.results) { item in
-              NavigationLink(value: item.id) {
-                TVPosterCard(item: item)
+              TVPosterLink(item: item) {
+                Task { await model.loadMore(after: item, session: session) }
               }
-              .buttonStyle(.card)
             }
           }
-          .padding(80)
+          .padding(.horizontal, TVBrowseLayout.horizontalInset)
+          .padding(.vertical, 46)
+
+          if model.isSearching || model.isLoadingMore {
+            TVPageProgress(pagination: model.pagination)
+          }
         }
 
         if let error = model.errorMessage {
@@ -361,6 +550,25 @@ struct TVSearchView: View {
       .onSubmit(of: .search) { Task { await model.search(session: session) } }
       .navigationDestination(for: Int.self) { id in TVDetailView(id: id) }
     }
+  }
+}
+
+private struct TVPageProgress: View {
+  let pagination: Pagination?
+
+  var body: some View {
+    HStack(spacing: 18) {
+      ProgressView()
+      if let pagination, pagination.total > 1 {
+        Text("Loading page \(min(pagination.current + 1, pagination.total)) of \(pagination.total)")
+      } else {
+        Text("Loading more titles")
+      }
+    }
+    .font(.title3.weight(.medium))
+    .foregroundStyle(.secondary)
+    .frame(maxWidth: .infinity)
+    .padding(.vertical, 46)
   }
 }
 

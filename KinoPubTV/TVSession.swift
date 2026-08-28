@@ -88,10 +88,15 @@ final class TVSession: ObservableObject {
   }
 
   func fetchShelf(shortcut: MediaShortcut, type: MediaType) async throws -> [MediaItem] {
-    let response: PaginatedData<MediaItem> = try await perform(
-      ShortcutItemsRequest(shortcut: shortcut, contentType: type),
+    try await fetchShelfPage(shortcut: shortcut, type: type, page: 1).items
+  }
+
+  func fetchShelfPage(shortcut: MediaShortcut,
+                      type: MediaType,
+                      page: Int) async throws -> PaginatedData<MediaItem> {
+    try await perform(
+      ShortcutItemsRequest(shortcut: shortcut, contentType: type, page: page),
       as: PaginatedData<MediaItem>.self)
-    return response.items
   }
 
   func fetchHistory() async throws -> [HistoryItem] {
@@ -100,10 +105,13 @@ final class TVSession: ObservableObject {
   }
 
   func search(_ query: String) async throws -> [MediaItem] {
-    let response: PaginatedData<MediaItem> = try await perform(
-      SearchItemsRequest(contentType: nil, query: query),
+    try await searchPage(query, page: 1).items
+  }
+
+  func searchPage(_ query: String, page: Int) async throws -> PaginatedData<MediaItem> {
+    try await perform(
+      SearchItemsRequest(contentType: nil, page: page, query: query),
       as: PaginatedData<MediaItem>.self)
-    return response.items
   }
 
   func fetchDetails(id: Int) async throws -> MediaItem {
