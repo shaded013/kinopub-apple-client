@@ -222,7 +222,18 @@ private struct TVHero: View {
           .foregroundStyle(.secondary)
           .lineLimit(3)
           .frame(maxWidth: 760, alignment: .leading)
+
+        NavigationLink(value: item.id) {
+          Label("View details", systemImage: "info.circle.fill")
+            .font(.headline)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(TVTheme.accent)
+        .accessibilityLabel("View details for \(item.localizedTitle)")
       }
+      .focusSection()
       .padding(.horizontal, 80)
       .padding(.bottom, 45)
     }
