@@ -17,6 +17,7 @@
 import Foundation
 import Combine
 import KinoPubBackend
+import KinoPubKit
 import KinoPubLogging
 import OSLog
 import AVFoundation
@@ -163,8 +164,8 @@ public final class HLSAssetDownloadManager: NSObject, ObservableObject, AVAssetD
 
   /// Deletes the partial `.movpkg` left behind by an interrupted download, if its location was recorded.
   private func deletePartial(_ entry: PendingHLSDownload) {
-    guard let relativePath = entry.partialRelativePath else { return }
-    let url = URL(fileURLWithPath: NSHomeDirectory() + "/" + relativePath)
+    guard let relativePath = entry.partialRelativePath,
+          let url = ValidatedHLSAssetPath.url(for: relativePath) else { return }
     try? FileManager.default.removeItem(at: url)
   }
 

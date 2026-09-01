@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' https://raw.githubusercontent.com; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <title>KinoPub — Apple client</title>
   <meta name="description" content="Unofficial kino.pub client for iPhone, iPad & Mac. One-tap install via AltStore / SideStore.">
   <!-- Custom-scheme redirector: GitHub Markdown strips altstore://, so README/wiki buttons point here
@@ -10,8 +11,14 @@
   <script>
     (function () {
       try {
-        var r = new URLSearchParams(location.search).get('r');
-        if (r) { location.replace(r); }
+        var source = 'https://github.com/dungeon-master-xx/kinopub-apple-client/releases/latest/download/apps.json';
+        var action = new URLSearchParams(location.search).get('open');
+        var destination = action === 'altstore'
+          ? 'altstore-classic://source?url=' + encodeURIComponent(source)
+          : action === 'sidestore'
+            ? 'sidestore://source?url=' + encodeURIComponent(source)
+            : null;
+        if (destination) { location.replace(destination); }
       } catch (e) {}
     })();
   </script>
@@ -46,8 +53,8 @@
     <p id="redir">Opening your sideload app…</p>
 
     <div class="btns">
-      <a class="btn altstore"  href="./?r=altstore-classic://source?url=https%3A%2F%2Fgithub.com%2Fdungeon-master-xx%2Fkinopub-apple-client%2Freleases%2Flatest%2Fdownload%2Fapps.json">➕ Add to AltStore Classic</a>
-      <a class="btn sidestore" href="./?r=sidestore://source?url=https%3A%2F%2Fgithub.com%2Fdungeon-master-xx%2Fkinopub-apple-client%2Freleases%2Flatest%2Fdownload%2Fapps.json">➕ Add to SideStore</a>
+      <a class="btn altstore"  href="./?open=altstore">➕ Add to AltStore Classic</a>
+      <a class="btn sidestore" href="./?open=sidestore">➕ Add to SideStore</a>
       <a class="btn primary"   href="https://github.com/dungeon-master-xx/kinopub-apple-client/releases/latest">⬇︎ Download IPA / macOS</a>
       <a class="btn ghost"     href="https://github.com/dungeon-master-xx/kinopub-apple-client/wiki">📖 Install guide &amp; FAQ</a>
     </div>
@@ -70,7 +77,7 @@
   </div>
 
   <script>
-    if (new URLSearchParams(location.search).get('r')) {
+    if (['altstore', 'sidestore'].includes(new URLSearchParams(location.search).get('open'))) {
       document.getElementById('redir').style.display = 'block';
     }
   </script>

@@ -20,7 +20,7 @@ jobs:
   release-please:
     runs-on: ubuntu-latest
     steps:
-      - uses: googleapis/release-please-action@v4
+      - uses: googleapis/release-please-action@8b8fd2cc23b2e18957157a9d923d75aa0c6f6ad5 # v4
         id: release
         with:
           # PAT so the release PR is authored by the account (not github-actions[bot]) — its CI then
@@ -36,4 +36,10 @@ jobs:
         if: ${{ steps.release.outputs.release_created }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run release.yml -f tag=${{ steps.release.outputs.tag_name }} --repo "${{ github.repository }}"
+          RELEASE_TAG: ${{ steps.release.outputs.tag_name }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release tag: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          gh workflow run release.yml --ref "$RELEASE_TAG" -f "tag=$RELEASE_TAG" --repo "${{ github.repository }}"
