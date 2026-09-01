@@ -81,9 +81,9 @@ Add this repo as a source to install in one tap and **get new versions automatic
 
 [![AltStore source](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fgithub.com%2Fdungeon-master-xx%2Fkinopub-apple-client%2Freleases%2Flatest%2Fdownload%2Fapps.json&query=%24.apps%5B0%5D.versions%5B0%5D.version&prefix=v&label=AltStore%20source&style=for-the-badge&color=1F8AFF)](https://github.com/dungeon-master-xx/kinopub-apple-client/releases/latest)
 
-[![Add to AltStore Classic](https://img.shields.io/badge/Add_to-AltStore_Classic-1F8AFF?style=for-the-badge)](https://dungeon-master-xx.github.io/kinopub-apple-client/?r=altstore-classic://source?url=https%3A%2F%2Fgithub.com%2Fdungeon-master-xx%2Fkinopub-apple-client%2Freleases%2Flatest%2Fdownload%2Fapps.json)
+[![Add to AltStore Classic](https://img.shields.io/badge/Add_to-AltStore_Classic-1F8AFF?style=for-the-badge)](https://dungeon-master-xx.github.io/kinopub-apple-client/?open=altstore)
 &nbsp;
-[![Add to SideStore](https://img.shields.io/badge/Add_to-SideStore-8A4FFF?style=for-the-badge)](https://dungeon-master-xx.github.io/kinopub-apple-client/?r=sidestore://source?url=https%3A%2F%2Fgithub.com%2Fdungeon-master-xx%2Fkinopub-apple-client%2Freleases%2Flatest%2Fdownload%2Fapps.json)
+[![Add to SideStore](https://img.shields.io/badge/Add_to-SideStore-8A4FFF?style=for-the-badge)](https://dungeon-master-xx.github.io/kinopub-apple-client/?open=sidestore)
 
 </div>
 

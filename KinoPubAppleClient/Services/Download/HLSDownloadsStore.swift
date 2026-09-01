@@ -96,15 +96,17 @@ public final class HLSDownloadsStore {
 
   /// On-disk size (in bytes) of the `.movpkg` directory for the given asset.
   public func diskSize(of asset: HLSDownloadedAsset) -> Int64 {
-    Self.directorySize(at: asset.localFileURL)
+    guard let url = ValidatedHLSAssetPath.url(for: asset.relativePath) else { return 0 }
+    return Self.directorySize(at: url)
   }
 
   // MARK: - Removal
 
   /// Deletes the `.movpkg` bundle from disk and removes the persisted record.
   public func remove(_ asset: HLSDownloadedAsset) {
-    if asset.fileExists {
-      try? FileManager.default.removeItem(at: asset.localFileURL)
+    if let url = ValidatedHLSAssetPath.url(for: asset.relativePath),
+       FileManager.default.fileExists(atPath: url.path) {
+      try? FileManager.default.removeItem(at: url)
     }
     var current = readData()
     current.removeAll(where: { $0.relativePath == asset.relativePath })

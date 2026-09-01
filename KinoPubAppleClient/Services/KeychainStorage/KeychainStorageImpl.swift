@@ -15,44 +15,28 @@ final class KeychainStorageImpl: KeychainStorage {
   }()
 
 #if os(macOS)
-  // On macOS the legacy keychain prompts "… wants to use the keychain" on EVERY launch: the item's
-  // ACL is tied to the app's code signature, which changes between (dev) builds, so "Always Allow"
-  // never sticks. For a low-risk media-client token the conventional, prompt-free approach is plain
-  // UserDefaults. Any token already in the keychain is migrated once (so the user stays logged in),
-  // after which the keychain is never touched again → no more prompts.
-  private let defaults = UserDefaults.standard
-  private let prefix = "secureStore."
+  // Some previous macOS builds stored credentials in UserDefaults to avoid prompts caused by ad-hoc
+  // development signatures. Migrate that value back to Keychain as soon as it is encountered,
+  // and remove the preference only after the secure write succeeds.
+  private let legacyDefaults = UserDefaults.standard
+  private let legacyPrefix = "secureStore."
+#endif
 
   func object<Value>(for key: Key<Value>) -> Value? where Value: Decodable, Value: Encodable {
-    if let data = defaults.data(forKey: prefix + key.rawValue) {
-      return try? JSONDecoder().decode(Value.self, from: data)
-    }
-    // One-time migration from the legacy keychain (this read may prompt once, then never again).
-    if let data = try? keychain.getData(key.rawValue),
+#if os(macOS)
+    let legacyKey = legacyPrefix + key.rawValue
+    if let data = legacyDefaults.data(forKey: legacyKey),
        let value = try? JSONDecoder().decode(Value.self, from: data) {
-      defaults.set(data, forKey: prefix + key.rawValue)
-      try? keychain.remove(key.rawValue)
+      do {
+        try keychain.set(data, key: key.rawValue)
+        legacyDefaults.removeObject(forKey: legacyKey)
+      } catch {
+        // Keep the legacy value so migration can be retried instead of logging the user out.
+        print(error)
+      }
       return value
     }
-    return nil
-  }
-
-  func setObject<Value>(_ object: Value?, for key: Key<Value>) where Value: Decodable, Value: Encodable {
-    guard let object, let data = try? JSONEncoder().encode(object) else {
-      defaults.removeObject(forKey: prefix + key.rawValue)
-      return
-    }
-    defaults.set(data, forKey: prefix + key.rawValue)
-  }
-
-  func clear() {
-    for key in defaults.dictionaryRepresentation().keys where key.hasPrefix(prefix) {
-      defaults.removeObject(forKey: key)
-    }
-    try? keychain.removeAll()
-  }
-#else
-  public func object<Value>(for key: Key<Value>) -> Value? where Value: Decodable, Value: Encodable {
+#endif
     do {
       guard let data = try keychain.getData(key.rawValue) else { return nil }
       return try JSONDecoder().decode(Value.self, from: data)
@@ -62,10 +46,25 @@ final class KeychainStorageImpl: KeychainStorage {
     }
   }
 
-  public func setObject<Value>(_ object: Value?, for key: Key<Value>) where Value: Decodable, Value: Encodable {
+  func setObject<Value>(_ object: Value?, for key: Key<Value>) where Value: Decodable, Value: Encodable {
+    guard let object else {
+      do {
+        try keychain.remove(key.rawValue)
+      } catch {
+        print(error)
+      }
+#if os(macOS)
+      legacyDefaults.removeObject(forKey: legacyPrefix + key.rawValue)
+#endif
+      return
+    }
+
     do {
       let data = try JSONEncoder().encode(object)
       try keychain.set(data, key: key.rawValue)
+#if os(macOS)
+      legacyDefaults.removeObject(forKey: legacyPrefix + key.rawValue)
+#endif
     } catch {
       print(error)
     }
@@ -77,6 +76,10 @@ final class KeychainStorageImpl: KeychainStorage {
     } catch {
       print(error)
     }
-  }
+#if os(macOS)
+    for key in legacyDefaults.dictionaryRepresentation().keys where key.hasPrefix(legacyPrefix) {
+      legacyDefaults.removeObject(forKey: key)
+    }
 #endif
+  }
 }
