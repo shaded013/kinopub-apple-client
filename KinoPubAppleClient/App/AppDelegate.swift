@@ -18,9 +18,49 @@ class AppDelegate: NSObject, UIApplicationDelegate {
   
   func application(_ application: UIApplication,
                    didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+    configureDarkControlAppearance()
     UIDevice.current.beginGeneratingDeviceOrientationNotifications()
     ImageCache.shared.purgeExpired()
     return true
+  }
+
+  /// SwiftUI's `.tint` does not reliably reach UIKit-backed TabView/TextField content on iOS 26.
+  /// Configure the actual UIKit controls before SwiftUI creates them so selected tab symbols/titles
+  /// and the text insertion caret always contrast with the app's dark chrome.
+  private func configureDarkControlAppearance() {
+    let selectedColor = UIColor(Color.KinoPub.accent)
+    let normalColor = UIColor(Color.KinoPub.text).withAlphaComponent(0.82)
+
+    let tabAppearance = UITabBarAppearance()
+    tabAppearance.configureWithDefaultBackground()
+    configure(tabAppearance.stackedLayoutAppearance,
+              normalColor: normalColor,
+              selectedColor: selectedColor)
+    configure(tabAppearance.inlineLayoutAppearance,
+              normalColor: normalColor,
+              selectedColor: selectedColor)
+    configure(tabAppearance.compactInlineLayoutAppearance,
+              normalColor: normalColor,
+              selectedColor: selectedColor)
+
+    let tabBar = UITabBar.appearance()
+    tabBar.standardAppearance = tabAppearance
+    tabBar.scrollEdgeAppearance = tabAppearance
+    tabBar.tintColor = selectedColor
+    tabBar.unselectedItemTintColor = normalColor
+
+    // This is also set on the concrete Search field, but the appearance default protects any
+    // system-hosted text field SwiftUI creates before applying its own environment tint.
+    UITextField.appearance().tintColor = selectedColor
+  }
+
+  private func configure(_ appearance: UITabBarItemAppearance,
+                         normalColor: UIColor,
+                         selectedColor: UIColor) {
+    appearance.normal.iconColor = normalColor
+    appearance.normal.titleTextAttributes = [.foregroundColor: normalColor]
+    appearance.selected.iconColor = selectedColor
+    appearance.selected.titleTextAttributes = [.foregroundColor: selectedColor]
   }
   
   func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {

@@ -11,6 +11,9 @@
 import SwiftUI
 import KinoPubUI
 import KinoPubBackend
+#if os(iOS)
+import UIKit
+#endif
 
 /// Wrapper so a `MediaItem` can drive a `.sheet(item:)` (MediaItem isn't Identifiable on its own).
 private struct BookmarkTarget: Identifiable {
@@ -25,7 +28,11 @@ struct SearchView: View {
   @Environment(\.appContext) var appContext
   @StateObject private var model: SearchModel
 
+#if os(iOS)
+  @State private var searchFocused = false
+#else
   @FocusState private var searchFocused: Bool
+#endif
   @State private var didAutoFocus = false
   @State private var bookmarkTarget: BookmarkTarget?
   /// True after the user commits a search (Return or tapping a suggestion) → show the sectioned
@@ -89,18 +96,23 @@ struct SearchView: View {
   private var searchField: some View {
     HStack(spacing: 8) {
       Image(systemName: "magnifyingglass").foregroundStyle(Color.KinoPub.subtitle)
+#if os(iOS)
+      SearchUIKitTextField(
+        placeholder: "Shows & Movies".localized,
+        text: $model.query,
+        isFocused: Binding(get: { searchFocused }, set: { searchFocused = $0 }),
+        onSubmit: { committed = true; searchFocused = false }
+      )
+#else
       TextField("Shows & Movies".localized, text: $model.query)
         .textFieldStyle(.plain)
         .foregroundStyle(Color.KinoPub.text)
-        // Explicit tint keeps the insertion caret visible in the dark glass field on iOS 26.
         .tint(Color.KinoPub.accent)
         .focused($searchFocused)
         .submitLabel(.search)
         .autocorrectionDisabled()
-#if os(iOS)
-        .textInputAutocapitalization(.never)
-#endif
         .onSubmit { committed = true; searchFocused = false } // commit → sections, keyboard down
+#endif
       if !model.query.isEmpty {
         Button {
           model.query = ""
@@ -117,7 +129,7 @@ struct SearchView: View {
     .padding(.horizontal, 12)
     // Fixed height so the row doesn't grow when the (taller) clear button appears on first keystroke.
     .frame(height: 44)
-    .glassSearchField()
+    .glassSearchField(isFocused: searchFocused)
   }
 
   // MARK: - Discovery (empty query): recent + browse
@@ -416,16 +428,114 @@ struct SearchView: View {
   }
 }
 
+#if os(iOS)
+/// Native iOS search input. Keeping ownership of the underlying `UITextField` makes the insertion
+/// caret and first-responder state deterministic on iOS 26, where SwiftUI's TextField can inherit a
+/// black UIKit tint even though the surrounding SwiftUI hierarchy is tinted green.
+private struct SearchUIKitTextField: UIViewRepresentable {
+  let placeholder: String
+  @Binding var text: String
+  @Binding var isFocused: Bool
+  let onSubmit: () -> Void
+
+  func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
+
+  func makeUIView(context: Context) -> FocusAwareTextField {
+    let textField = FocusAwareTextField(frame: .zero)
+    textField.delegate = context.coordinator
+    textField.backgroundColor = .clear
+    textField.borderStyle = .none
+    textField.textColor = UIColor(Color.KinoPub.text)
+    textField.tintColor = UIColor(Color.KinoPub.accent)
+    textField.font = .preferredFont(forTextStyle: .body)
+    textField.adjustsFontForContentSizeCategory = true
+    textField.returnKeyType = .search
+    textField.autocorrectionType = .no
+    textField.autocapitalizationType = .none
+    textField.clearButtonMode = .never
+    textField.attributedPlaceholder = NSAttributedString(
+      string: placeholder,
+      attributes: [.foregroundColor: UIColor(Color.KinoPub.subtitle)]
+    )
+    textField.accessibilityLabel = placeholder
+    textField.addTarget(context.coordinator,
+                        action: #selector(Coordinator.textChanged(_:)),
+                        for: .editingChanged)
+    return textField
+  }
+
+  func updateUIView(_ textField: FocusAwareTextField, context: Context) {
+    context.coordinator.parent = self
+    if textField.text != text { textField.text = text }
+    textField.textColor = UIColor(Color.KinoPub.text)
+    textField.tintColor = UIColor(Color.KinoPub.accent)
+
+    textField.wantsFirstResponder = isFocused
+    textField.applyRequestedFocus()
+  }
+
+  final class Coordinator: NSObject, UITextFieldDelegate {
+    var parent: SearchUIKitTextField
+
+    init(parent: SearchUIKitTextField) { self.parent = parent }
+
+    @objc func textChanged(_ sender: UITextField) {
+      parent.text = sender.text ?? ""
+    }
+
+    func textFieldDidBeginEditing(_ textField: UITextField) {
+      if !parent.isFocused { parent.isFocused = true }
+    }
+
+    func textFieldDidEndEditing(_ textField: UITextField) {
+      if parent.isFocused { parent.isFocused = false }
+    }
+
+    func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+      parent.onSubmit()
+      textField.resignFirstResponder()
+      return true
+    }
+  }
+}
+
+private final class FocusAwareTextField: UITextField {
+  var wantsFirstResponder = false
+
+  override func didMoveToWindow() {
+    super.didMoveToWindow()
+    applyRequestedFocus()
+  }
+
+  func applyRequestedFocus() {
+    guard window != nil else { return }
+    if wantsFirstResponder, !isFirstResponder {
+      DispatchQueue.main.async { [weak self] in
+        guard let self, self.wantsFirstResponder else { return }
+        self.becomeFirstResponder()
+      }
+    } else if !wantsFirstResponder, isFirstResponder {
+      resignFirstResponder()
+    }
+  }
+}
+#endif
+
 private extension View {
   /// Frosted glass background for the sticky search field (content scrolling underneath blurs
   /// through it). The glass is a *background* layer — applying `glassEffect` to the field itself
   /// makes it swallow taps (the clear button stops working), so we keep the field's controls in
   /// front and the material behind.
-  func glassSearchField() -> some View {
+  func glassSearchField(isFocused: Bool) -> some View {
     let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
     return self
       .background(shape.fill(.ultraThinMaterial))
-      .overlay(shape.strokeBorder(Color.white.opacity(0.10)).allowsHitTesting(false))
+      .overlay(
+        shape
+          .strokeBorder(isFocused ? Color.KinoPub.accent.opacity(0.9) : Color.white.opacity(0.10),
+                        lineWidth: isFocused ? 1.5 : 1)
+          .allowsHitTesting(false)
+      )
   }
 }
 
