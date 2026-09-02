@@ -32,10 +32,12 @@ struct SeasonView: View {
   }
   
   var listView: some View {
-    ScrollView {
+    let playbackQueue = model.playbackQueue
+    return ScrollView {
       LazyVGrid(columns: gridLayout, content: {
         ForEach(model.season.episodes, id: \.id) { item in
-          NavigationLink(value: model.linkProvider.player(for: model.filledEpisode(item))) {
+          NavigationLink(value: model.linkProvider.player(for: model.filledEpisode(item),
+                                                          episodeQueue: playbackQueue)) {
             SeasonItemView(episode: item, onDownload: { file in
               model.startDownload(episode: item, file: file)
             })

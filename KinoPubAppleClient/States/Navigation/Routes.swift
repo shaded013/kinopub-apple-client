@@ -21,7 +21,8 @@ enum Route: Hashable {
   case detailsByID(Int)
   case seasons([Season])
   case season(Season)
-  case player(any PlayableItem)
+  /// A playable item plus an optional ordered episode queue for in-player previous/next navigation.
+  case player(any PlayableItem, EpisodePlaybackQueue?)
   case trailerPlayer(any PlayableItem)
   /// A filtered catalog (genre/country/year/etc.) opened from a detail page.
   case filteredCatalog(MediaItemsFilter, String)
@@ -47,8 +48,8 @@ enum Route: Hashable {
       hasher.combine(2); hasher.combine(seasons)
     case .season(let season):
       hasher.combine(3); hasher.combine(season)
-    case .player(let item):
-      hasher.combine(4); hasher.combine(item.id)
+    case .player(let item, let queue):
+      hasher.combine(4); hasher.combine(item.id); hasher.combine(queue)
     case .trailerPlayer(let item):
       hasher.combine(5); hasher.combine(item.id)
     case .filteredCatalog(let filter, let title):

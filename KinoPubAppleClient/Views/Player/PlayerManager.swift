@@ -104,12 +104,15 @@ class PlayerManager: ObservableObject {
   @Published var isPlaying: Bool = false
   @Published var watchMark: WatchData?
   @Published var continueTime: TimeInterval?
+  @Published private(set) var currentPlaybackID: Int
+  @Published private(set) var canPlayPreviousEpisode = false
+  @Published private(set) var canPlayNextEpisode = false
   /// Human-readable diagnosis shown when the item can't be played (the native "crossed-out play"),
   /// so failures (e.g. an HLS stream AVPlayer rejects) surface on-device instead of silently.
   @Published var playbackError: String?
   
   /// Whether the playing title is a 3D (stereoscopic) release, so the player offers 3D view modes.
-  var is3D: Bool { FeatureFlags.threeDEnabled && (playItem as? MediaItem)?.type.lowercased() == "3d" }
+  var is3D: Bool { isThreeD(playItem) }
   /// Current 3D view mode (Off for non-3D titles).
   @Published var threeDMode: ThreeDMode = .off
 
@@ -122,8 +125,10 @@ class PlayerManager: ObservableObject {
     set { UserDefaults.standard.set(newValue.rawValue, forKey: threeDModeKey) }
   }
 
-  lazy var player: AVPlayer = {
-    guard let fileURL else { return AVPlayer() }
+  lazy var player = AVPlayer(playerItem: makePlayerItem(for: playItem))
+
+  private func makePlayerItem(for playItem: any PlayableItem) -> AVPlayerItem? {
+    guard let fileURL = fileURL(for: playItem) else { return nil }
     let item = AVPlayerItem(url: fileURL)
     if is3D, let comp = ThreeDVideoComposition.make(for: item.asset, mode: threeDMode) {
       item.videoComposition = comp
@@ -136,13 +141,13 @@ class PlayerManager: ObservableObject {
     }
     // Surface the title (and season/episode) in the native player UI (iOS/tvOS only).
     #if !os(macOS)
-    item.externalMetadata = externalMetadata()
+    item.externalMetadata = externalMetadata(for: playItem)
     #endif
-    return AVPlayer(playerItem: item)
-  }()
+    return item
+  }
 
   #if !os(macOS)
-  private func externalMetadata() -> [AVMetadataItem] {
+  private func externalMetadata(for playItem: any PlayableItem) -> [AVMetadataItem] {
     var items: [AVMetadataItem] = []
     // For a trailer, make it explicit in the player's title.
     var title = playItem.playerTitle
@@ -169,6 +174,8 @@ class PlayerManager: ObservableObject {
   private var playerTimeObserver: PlayerTimeObserver?
   private var playItem: any PlayableItem
   private var watchMode: WatchMode
+  private let episodeQueue: EpisodePlaybackQueue?
+  private var playbackGeneration = 0
   private var downloadedFilesDatabase: DownloadedFilesDatabase<DownloadMeta>
   private var rateObservation: NSKeyValueObservation?
   private var seekObservation: NSKeyValueObservation?
@@ -177,7 +184,7 @@ class PlayerManager: ObservableObject {
   private var endOfPlaybackObserver: NSObjectProtocol?
   private var actionsService: UserActionsService
   
-  private var fileURL: URL? {
+  private func fileURL(for playItem: any PlayableItem) -> URL? {
     switch watchMode {
     case .media:
       // A download is saved under the SERIES content id (DownloadMeta.id == mediaItem.id), but the
@@ -207,7 +214,7 @@ class PlayerManager: ObservableObject {
       // A 3D title needs a progressive (non-HLS) source: AVVideoComposition (the SBS/OU/anaglyph
       // reshaping) is ignored on HLS, so streaming via hls4 would just show the raw packed image.
       // Use the direct mp4 URL so the 3D composition actually applies.
-      if is3D {
+      if isThreeD(playItem) {
         let mp4 = BestVideoQualityFinder.bestProgressiveURL(for: playItem.files)
         if !mp4.isEmpty, let url = URL(string: mp4) { return url }
       }
@@ -223,10 +230,13 @@ class PlayerManager: ObservableObject {
   
   init(playItem: any PlayableItem,
        watchMode: WatchMode,
+       episodeQueue: EpisodePlaybackQueue? = nil,
        downloadedFilesDatabase: DownloadedFilesDatabase<DownloadMeta>,
        actionsService: UserActionsService) {
     self.playItem = playItem
     self.watchMode = watchMode
+    self.episodeQueue = episodeQueue
+    self.currentPlaybackID = playItem.id
     self.actionsService = actionsService
     self.downloadedFilesDatabase = downloadedFilesDatabase
     // A 3D title starts in the user's last-chosen mode (default: one eye as 2D, so it's watchable —
@@ -250,10 +260,34 @@ class PlayerManager: ObservableObject {
       }
     }
 
-    // Re-apply the remembered audio track (озвучка) once the item is ready, so the user's last dub
-    // choice carries across episodes and launches without any custom UI.
+    observeCurrentItem()
+
+    playerTimeObserver = PlayerTimeObserver(player: player, period: 10.0, timeUpdateHandler: { [weak self] time in
+      self?.saveWatchMark(time: time)
+      self?.captureCurrentAudio()
+    })
+
+    updateEpisodeNavigationAvailability()
+  }
+
+  deinit {
+    clearCurrentItemObservers()
+    rateObservation?.invalidate()
+    seekObservation?.invalidate()
+  }
+
+  private func isThreeD(_ item: any PlayableItem) -> Bool {
+    FeatureFlags.threeDEnabled && (item as? MediaItem)?.type.lowercased() == "3d"
+  }
+
+  private func observeCurrentItem() {
+    clearCurrentItemObservers()
+    guard let item = player.currentItem else { return }
+
+    // Re-apply the remembered audio track (озвучка) once every replacement item is ready, so the
+    // user's last dub choice carries across episodes and launches without any custom picker.
     if watchMode == .media {
-      audioObservation = player.currentItem?.observe(\.status, options: [.new, .initial]) { [weak self] item, _ in
+      audioObservation = item.observe(\.status, options: [.new, .initial]) { [weak self] item, _ in
         guard item.status == .readyToPlay else { return }
         self?.applyPreferredAudio()
         self?.audioObservation?.invalidate()
@@ -261,29 +295,28 @@ class PlayerManager: ObservableObject {
       }
     }
 
-    // Surface the exact reason the native player shows the "crossed-out play" (item failed to load),
-    // so an unplayable stream is diagnosable on-device instead of failing silently.
-    failureObservation = player.currentItem?.observe(\.status, options: [.new]) { [weak self] item, _ in
+    failureObservation = item.observe(\.status, options: [.new]) { [weak self] item, _ in
       guard item.status == .failed else { return }
       DispatchQueue.main.async { self?.reportPlaybackFailure(item) }
     }
 
-    playerTimeObserver = PlayerTimeObserver(player: player, period: 10.0, timeUpdateHandler: { [weak self] time in
-      self?.saveWatchMark(time: time)
-      self?.captureCurrentAudio()
-    })
-
-    // Playing to the very end marks the title watched (see `markFinished`).
     if watchMode == .media {
       endOfPlaybackObserver = NotificationCenter.default.addObserver(
-        forName: .AVPlayerItemDidPlayToEndTime, object: player.currentItem, queue: .main) { [weak self] _ in
+        forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main) { [weak self] _ in
           self?.markFinished()
       }
     }
   }
 
-  deinit {
-    if let endOfPlaybackObserver { NotificationCenter.default.removeObserver(endOfPlaybackObserver) }
+  private func clearCurrentItemObservers() {
+    audioObservation?.invalidate()
+    audioObservation = nil
+    failureObservation?.invalidate()
+    failureObservation = nil
+    if let endOfPlaybackObserver {
+      NotificationCenter.default.removeObserver(endOfPlaybackObserver)
+      self.endOfPlaybackObserver = nil
+    }
   }
 
   // MARK: - Failure diagnostics
@@ -348,23 +381,24 @@ class PlayerManager: ObservableObject {
   // MARK: - Watch marks
   
   func saveWatchMark(time: TimeInterval) {
+    let metadata = playItem.metadata
     // Persist a local resume point so "Continue Watching" reflects what the user actually
     // started, independent of the backend (skips live/trailers via the non-finite duration).
     if watchMode == .media {
       let duration = player.currentItem?.duration.seconds ?? 0
-      AppContext.shared.localProgressStore.recordProgress(mediaId: playItem.metadata.id,
+      AppContext.shared.localProgressStore.recordProgress(mediaId: metadata.id,
                                                           position: time,
                                                           duration: duration,
-                                                          season: playItem.metadata.season,
-                                                          episode: playItem.metadata.video)
+                                                          season: metadata.season,
+                                                          episode: metadata.video)
     }
 
-    Task.detached(priority: .utility) { [weak self] in
-      guard let self else { return }
+    let actionsService = actionsService
+    Task.detached(priority: .utility) {
       do {
-        try await self.actionsService.markWatch(id: self.playItem.metadata.id,
-                                                time: Int(time), video: self.playItem.metadata.video,
-                                                season: self.playItem.metadata.season)
+        try await actionsService.markWatch(id: metadata.id,
+                                           time: Int(time), video: metadata.video,
+                                           season: metadata.season)
       } catch {
         Logger.app.error("Failed to save watch mark: \(error)")
       }
@@ -379,13 +413,14 @@ class PlayerManager: ObservableObject {
     guard watchMode == .media else { return }
     let duration = player.currentItem?.duration.seconds ?? 0
     guard duration.isFinite, duration > 0 else { return }
-    AppContext.shared.localProgressStore.clear(id: playItem.metadata.id)
-    Task.detached(priority: .utility) { [weak self] in
-      guard let self else { return }
+    let metadata = playItem.metadata
+    AppContext.shared.localProgressStore.clear(id: metadata.id)
+    let actionsService = actionsService
+    Task.detached(priority: .utility) {
       do {
-        try await self.actionsService.markWatch(id: self.playItem.metadata.id,
-                                                time: Int(duration), video: self.playItem.metadata.video,
-                                                season: self.playItem.metadata.season)
+        try await actionsService.markWatch(id: metadata.id,
+                                           time: Int(duration), video: metadata.video,
+                                           season: metadata.season)
       } catch {
         Logger.app.error("Failed to mark finished: \(error)")
       }
@@ -395,12 +430,19 @@ class PlayerManager: ObservableObject {
   func fetchWatchMark() async {
     // Only media has a resume point (live/trailers don't).
     guard watchMode == .media else { return }
+    let generation = playbackGeneration
+    let metadata = playItem.metadata
 
     var remoteContinueTime: TimeInterval = 0
+    var fetchedWatchMark: WatchData?
     do {
-      watchMark = try await actionsService.fetchWatchMark(id: playItem.metadata.id, video: playItem.metadata.video, season: playItem.metadata.season)
-      if let watchMark {
-        remoteContinueTime = watchMark.item.videos?.first?.time ?? watchMark.item.seasons?.first?.episodes.first?.time ?? 0
+      fetchedWatchMark = try await actionsService.fetchWatchMark(id: metadata.id,
+                                                                 video: metadata.video,
+                                                                 season: metadata.season)
+      if let fetchedWatchMark {
+        remoteContinueTime = fetchedWatchMark.item.videos?.first?.time
+          ?? fetchedWatchMark.item.seasons?.first?.episodes.first?.time
+          ?? 0
       }
     } catch {
       Logger.app.error("Failed to fetch watch mark: \(error)")
@@ -409,12 +451,74 @@ class PlayerManager: ObservableObject {
     // Fall back to the local resume point: a movie/episode watched in-app records its position
     // locally on every tick, so it resumes even when the server mark lags or the fetch fails.
     let localContinueTime = AppContext.shared.localProgressStore
-      .entry(forId: playItem.metadata.id, season: playItem.metadata.season, episode: playItem.metadata.video)?
+      .entry(forId: metadata.id, season: metadata.season, episode: metadata.video)?
       .position ?? 0
 
+    // Ignore a slow response for an episode the user has already left.
+    guard generation == playbackGeneration else { return }
+    watchMark = fetchedWatchMark
     let best = max(remoteContinueTime, localContinueTime)
     // Keep any value we already seeded synchronously if the refined fetch somehow comes back empty.
     if best > 0 { continueTime = best }
+  }
+
+  // MARK: - Episode navigation
+
+  @MainActor
+  func playPreviousEpisode() {
+    guard let current = playItem as? Episode,
+          let previous = episodeQueue?.previous(before: current) else { return }
+    switchToEpisode(previous)
+  }
+
+  @MainActor
+  func playNextEpisode() {
+    guard let current = playItem as? Episode,
+          let next = episodeQueue?.next(after: current) else { return }
+    switchToEpisode(next)
+  }
+
+  @MainActor
+  private func switchToEpisode(_ episode: Episode) {
+    // Flush the outgoing episode before changing `playItem`; asynchronous progress uploads capture
+    // its metadata, so a quick switch can never attribute the old timestamp to the new episode.
+    let outgoingTime = player.currentTime().seconds
+    if outgoingTime.isFinite, outgoingTime > 0 {
+      saveWatchMark(time: outgoingTime)
+    }
+    captureCurrentAudio()
+
+    playbackGeneration &+= 1
+    seekObservation?.invalidate()
+    seekObservation = nil
+    playItem = episode
+    currentPlaybackID = episode.id
+    watchMark = nil
+    playbackError = nil
+    continueTime = AppContext.shared.localProgressStore
+      .entry(forId: episode.metadata.id,
+             season: episode.metadata.season,
+             episode: episode.metadata.video)?
+      .position
+
+    player.replaceCurrentItem(with: makePlayerItem(for: episode))
+    observeCurrentItem()
+    updateEpisodeNavigationAvailability()
+    player.play()
+
+    Task { [weak self] in
+      await self?.fetchWatchMark()
+    }
+  }
+
+  private func updateEpisodeNavigationAvailability() {
+    guard let current = playItem as? Episode, let episodeQueue else {
+      canPlayPreviousEpisode = false
+      canPlayNextEpisode = false
+      return
+    }
+    canPlayPreviousEpisode = episodeQueue.previous(before: current) != nil
+    canPlayNextEpisode = episodeQueue.next(after: current) != nil
   }
   
   // MARK: - Continue watching

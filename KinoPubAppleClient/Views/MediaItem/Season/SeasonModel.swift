@@ -32,6 +32,12 @@ class SeasonModel: ObservableObject {
     return episode
   }
 
+  var playbackQueue: EpisodePlaybackQueue {
+    EpisodePlaybackQueue(episodes: season.episodes
+      .sorted { $0.number < $1.number }
+      .map(filledEpisode))
+  }
+
   /// Builds a `DownloadMeta` for a single episode. Mirrors the shape used by
   /// `MediaItem.downloadableItems` (name "S{season}E{episode}", per-episode files & watching metadata)
   /// but only depends on data that is available from a `Season`/`Episode`.

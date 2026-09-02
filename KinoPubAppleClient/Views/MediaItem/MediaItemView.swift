@@ -445,7 +445,8 @@ struct MediaItemView: View {
     // On a narrow screen the play button spans the full width on its own row.
     let fullWidth = !usesSidebarSections
     if mediaItem.isSeries, let episode = seriesPlayEpisode {
-      NavigationLink(value: itemModel.linkProvider.player(for: episode)) {
+      NavigationLink(value: itemModel.linkProvider.player(for: episode,
+                                                          episodeQueue: seriesPlaybackQueue)) {
         playLabel(title, subtitle: resumeSubtitle, fullWidth: fullWidth)
       }
       .buttonStyle(.plain)
@@ -700,6 +701,13 @@ struct MediaItemView: View {
     return episode
   }
 
+  /// A single ordered queue across every season, allowing the player to cross a season boundary.
+  private var seriesPlaybackQueue: EpisodePlaybackQueue {
+    EpisodePlaybackQueue(episodes: mediaItem.orderedEpisodes.map { entry in
+      filledEpisode(entry.episode, in: entry.season)
+    })
+  }
+
   // MARK: - Episodes
 
   @ViewBuilder
@@ -712,7 +720,8 @@ struct MediaItemView: View {
           ScrollView(.horizontal, showsIndicators: false) {
             LazyHStack(alignment: .top, spacing: 14) {
               ForEach(season.episodes, id: \.id) { episode in
-                NavigationLink(value: itemModel.linkProvider.player(for: filledEpisode(episode, in: season))) {
+                NavigationLink(value: itemModel.linkProvider.player(for: filledEpisode(episode, in: season),
+                                                                    episodeQueue: seriesPlaybackQueue)) {
                   EpisodeCard(imageURL: episode.thumbnail,
                               overline: "\("Episode".localized) \(episode.number)",
                               title: episode.fixedTitle,

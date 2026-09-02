@@ -157,7 +157,7 @@ struct DownloadsView: View {
   /// Completed HLS downloads (.movpkg). Tapping opens the player; swipe deletes the bundle.
   var hlsCompletedList: some View {
     ForEach(catalog.hlsCompleted, id: \.relativePath) { asset in
-      playRow(Route.player(asset.meta)) {
+      playRow(Route.player(asset.meta, nil)) {
         DownloadedItemView(mediaItem: asset.meta, progress: nil, fileURL: asset.localFileURL) { _ in }
       }
       .contextMenu { detailLink(for: asset.meta) }
@@ -186,7 +186,7 @@ struct DownloadsView: View {
 
   var downloadedFilesList: some View {
     ForEach(catalog.downloadedItems, id: \.originalURL) { fileInfo in
-      playRow(Route.player(fileInfo.metadata)) {
+      playRow(Route.player(fileInfo.metadata, nil)) {
         DownloadedItemView(mediaItem: fileInfo.metadata, progress: nil, fileURL: fileInfo.localFileURL) { _ in }
       }
       .contextMenu { detailLink(for: fileInfo.metadata) }

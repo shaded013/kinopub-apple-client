@@ -26,9 +26,14 @@ struct PlayerView: View {
 #if os(iOS)
     // Fully native AVPlayerViewController (its own controls, Done button, gestures, PiP).
     NativePlayerView(player: playerManager.player,
+                     playbackID: playerManager.currentPlaybackID,
                      resumeTime: playerManager.continueTime,
+                     canPlayPreviousEpisode: playerManager.canPlayPreviousEpisode,
+                     canPlayNextEpisode: playerManager.canPlayNextEpisode,
                      onResume: { playerManager.seekToContinueWatching() },
                      onStartOver: { playerManager.cancelContinueWatching() },
+                     onPreviousEpisode: { playerManager.playPreviousEpisode() },
+                     onNextEpisode: { playerManager.playNextEpisode() },
                      onFinished: { dismiss() })
       .ignoresSafeArea(.all)
       .navigationBarHidden(true)
@@ -149,9 +154,14 @@ private extension View {
 /// PiP and gestures with no custom overlay), and a native "Continue Watching" alert.
 private struct NativePlayerView: UIViewControllerRepresentable {
   let player: AVPlayer
+  let playbackID: Int
   let resumeTime: TimeInterval?
+  let canPlayPreviousEpisode: Bool
+  let canPlayNextEpisode: Bool
   let onResume: () -> Void
   let onStartOver: () -> Void
+  let onPreviousEpisode: () -> Void
+  let onNextEpisode: () -> Void
   let onFinished: () -> Void
 
   func makeUIViewController(context: Context) -> PlayerHostController {
@@ -161,6 +171,11 @@ private struct NativePlayerView: UIViewControllerRepresentable {
     host.onResume = onResume
     host.onStartOver = onStartOver
     host.onFinished = onFinished
+    host.configureEpisodeNavigation(playbackID: playbackID,
+                                    canPlayPrevious: canPlayPreviousEpisode,
+                                    canPlayNext: canPlayNextEpisode,
+                                    onPrevious: onPreviousEpisode,
+                                    onNext: onNextEpisode)
     return host
   }
 
@@ -171,6 +186,11 @@ private struct NativePlayerView: UIViewControllerRepresentable {
     host.onResume = onResume
     host.onStartOver = onStartOver
     host.onFinished = onFinished
+    host.configureEpisodeNavigation(playbackID: playbackID,
+                                    canPlayPrevious: canPlayPreviousEpisode,
+                                    canPlayNext: canPlayNextEpisode,
+                                    onPrevious: onPreviousEpisode,
+                                    onNext: onNextEpisode)
     host.presentResumeAlertIfNeeded()
   }
 }
@@ -186,9 +206,15 @@ final class PlayerHostController: UIViewController {
   var onStartOver: (() -> Void)?
   var onFinished: (() -> Void)?
 
+  private var playbackID: Int?
+  private var canPlayPreviousEpisode = false
+  private var canPlayNextEpisode = false
+  private var onPreviousEpisode: (() -> Void)?
+  private var onNextEpisode: (() -> Void)?
   private var didPresent = false
   private var didAskResume = false
   private weak var playerController: AVPlayerViewController?
+  private weak var episodeNavigationControls: EpisodeNavigationControlsView?
 
   override func viewDidLoad() {
     super.viewDidLoad()
@@ -220,6 +246,18 @@ final class PlayerHostController: UIViewController {
     controller.delegate = PlayerPiPCoordinator.shared
     playerController = controller
 
+    let episodeControls = EpisodeNavigationControlsView()
+    episodeControls.translatesAutoresizingMaskIntoConstraints = false
+    controller.view.addSubview(episodeControls)
+    NSLayoutConstraint.activate([
+      episodeControls.leadingAnchor.constraint(equalTo: controller.view.leadingAnchor),
+      episodeControls.trailingAnchor.constraint(equalTo: controller.view.trailingAnchor),
+      episodeControls.topAnchor.constraint(equalTo: controller.view.topAnchor),
+      episodeControls.bottomAnchor.constraint(equalTo: controller.view.bottomAnchor)
+    ])
+    episodeNavigationControls = episodeControls
+    updateEpisodeNavigationControls()
+
     present(controller, animated: true) { [weak self] in
       player.play()
       self?.presentResumeAlertIfNeeded()
@@ -236,12 +274,113 @@ final class PlayerHostController: UIViewController {
     onResume?()
   }
 
+  func configureEpisodeNavigation(playbackID: Int,
+                                  canPlayPrevious: Bool,
+                                  canPlayNext: Bool,
+                                  onPrevious: @escaping () -> Void,
+                                  onNext: @escaping () -> Void) {
+    if self.playbackID != playbackID {
+      self.playbackID = playbackID
+      didAskResume = false
+    }
+    canPlayPreviousEpisode = canPlayPrevious
+    canPlayNextEpisode = canPlayNext
+    onPreviousEpisode = onPrevious
+    onNextEpisode = onNext
+    updateEpisodeNavigationControls()
+  }
+
+  private func updateEpisodeNavigationControls() {
+    episodeNavigationControls?.canPlayPrevious = canPlayPreviousEpisode
+    episodeNavigationControls?.canPlayNext = canPlayNextEpisode
+    episodeNavigationControls?.onPrevious = onPreviousEpisode
+    episodeNavigationControls?.onNext = onNextEpisode
+    episodeNavigationControls?.updateAppearance()
+  }
+
   private static func timeString(_ time: TimeInterval) -> String {
     let formatter = DateComponentsFormatter()
     formatter.allowedUnits = [.hour, .minute, .second]
     formatter.unitsStyle = .positional
     formatter.zeroFormattingBehavior = .pad
     return formatter.string(from: time) ?? ""
+  }
+}
+
+/// Interactive episode controls layered above `AVPlayerViewController`. Apple's `contentOverlayView`
+/// is intentionally noninteractive on iOS, so this transparent pass-through view only intercepts
+/// touches inside its two buttons and leaves every native player gesture/control untouched.
+private final class EpisodeNavigationControlsView: UIView {
+  var canPlayPrevious = false
+  var canPlayNext = false
+  var onPrevious: (() -> Void)?
+  var onNext: (() -> Void)?
+
+  private lazy var previousButton = makeButton(systemName: "backward.end.fill",
+                                               accessibilityLabel: "Previous episode",
+                                               accessibilityIdentifier: "player.previousEpisode",
+                                               action: #selector(playPrevious))
+  private lazy var nextButton = makeButton(systemName: "forward.end.fill",
+                                           accessibilityLabel: "Next episode",
+                                           accessibilityIdentifier: "player.nextEpisode",
+                                           action: #selector(playNext))
+
+  override init(frame: CGRect) {
+    super.init(frame: frame)
+    backgroundColor = .clear
+    addSubview(previousButton)
+    addSubview(nextButton)
+    NSLayoutConstraint.activate([
+      previousButton.leadingAnchor.constraint(equalTo: safeAreaLayoutGuide.leadingAnchor, constant: 18),
+      previousButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+      previousButton.widthAnchor.constraint(equalToConstant: 52),
+      previousButton.heightAnchor.constraint(equalTo: previousButton.widthAnchor),
+      nextButton.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -18),
+      nextButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+      nextButton.widthAnchor.constraint(equalToConstant: 52),
+      nextButton.heightAnchor.constraint(equalTo: nextButton.widthAnchor)
+    ])
+  }
+
+  required init?(coder: NSCoder) {
+    nil
+  }
+
+  override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+    previousButton.frame.contains(point) || nextButton.frame.contains(point)
+  }
+
+  func updateAppearance() {
+    isHidden = !canPlayPrevious && !canPlayNext
+    previousButton.isEnabled = canPlayPrevious
+    nextButton.isEnabled = canPlayNext
+    previousButton.alpha = canPlayPrevious ? 0.9 : 0.3
+    nextButton.alpha = canPlayNext ? 0.9 : 0.3
+  }
+
+  private func makeButton(systemName: String,
+                          accessibilityLabel: String,
+                          accessibilityIdentifier: String,
+                          action: Selector) -> UIButton {
+    var configuration = UIButton.Configuration.filled()
+    configuration.image = UIImage(systemName: systemName)
+    configuration.baseForegroundColor = .white
+    configuration.baseBackgroundColor = UIColor.black.withAlphaComponent(0.58)
+    configuration.cornerStyle = .capsule
+    let button = UIButton(configuration: configuration)
+    button.translatesAutoresizingMaskIntoConstraints = false
+    button.accessibilityLabel = accessibilityLabel
+    button.accessibilityIdentifier = accessibilityIdentifier
+    button.addTarget(self, action: action, for: .touchUpInside)
+    return button
+  }
+
+  @objc private func playPrevious() {
+    onPrevious?()
+  }
+
+  @objc private func playNext() {
+    onNext?()
   }
 }
 

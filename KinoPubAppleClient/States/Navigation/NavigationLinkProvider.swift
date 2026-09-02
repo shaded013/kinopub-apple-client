@@ -13,6 +13,7 @@ import KinoPubUI
 protocol NavigationLinkProvider {
   func link(for item: MediaItem) -> any Hashable
   func player(for item: any PlayableItem) -> any Hashable
+  func player(for item: any PlayableItem, episodeQueue: EpisodePlaybackQueue) -> any Hashable
   func trailerPlayer(for item: any PlayableItem) -> any Hashable
   func seasons(for seasons: [Season]) -> any Hashable
   func season(for season: Season) -> any Hashable
@@ -25,7 +26,10 @@ protocol NavigationLinkProvider {
 /// The one and only link provider: every section now navigates with the shared `Route` type.
 struct RouteLinkProvider: NavigationLinkProvider {
   func link(for item: MediaItem) -> any Hashable { Route.details(item) }
-  func player(for item: any PlayableItem) -> any Hashable { Route.player(item) }
+  func player(for item: any PlayableItem) -> any Hashable { Route.player(item, nil) }
+  func player(for item: any PlayableItem, episodeQueue: EpisodePlaybackQueue) -> any Hashable {
+    Route.player(item, episodeQueue)
+  }
   func trailerPlayer(for item: any PlayableItem) -> any Hashable { Route.trailerPlayer(item) }
   func seasons(for seasons: [Season]) -> any Hashable { Route.seasons(seasons) }
   func season(for season: Season) -> any Hashable { Route.season(season) }
@@ -68,10 +72,10 @@ struct RouteDestinationView: View {
       SeasonsView(model: SeasonsModel(seasons: seasons, linkProvider: RouteLinkProvider()))
     case .season(let season):
       SeasonView(model: SeasonModel(season: season, linkProvider: RouteLinkProvider()))
-    case .player(let item):
-      player(item, mode: .media)
+    case .player(let item, let episodeQueue):
+      player(item, mode: .media, episodeQueue: episodeQueue)
     case .trailerPlayer(let item):
-      player(item, mode: .trailer)
+      player(item, mode: .trailer, episodeQueue: nil)
     case .filteredCatalog(let filter, let title):
       FilteredCatalogView(catalog: MediaCatalog(itemsService: appContext.contentService,
                                                 authState: authState,
@@ -119,9 +123,12 @@ struct RouteDestinationView: View {
   }
 
   @ViewBuilder
-  private func player(_ item: any PlayableItem, mode: WatchMode) -> some View {
+  private func player(_ item: any PlayableItem,
+                      mode: WatchMode,
+                      episodeQueue: EpisodePlaybackQueue?) -> some View {
     PlayerView(manager: PlayerManager(playItem: item,
                                       watchMode: mode,
+                                      episodeQueue: episodeQueue,
                                       downloadedFilesDatabase: appContext.downloadedFilesDatabase,
                                       actionsService: appContext.actionsService))
   }
