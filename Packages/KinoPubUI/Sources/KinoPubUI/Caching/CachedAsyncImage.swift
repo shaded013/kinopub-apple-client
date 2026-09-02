@@ -12,6 +12,8 @@ public struct CachedAsyncImage<Content: View, Placeholder: View>: View {
 
   private let url: URL?
   private let maxCacheAge: TimeInterval?
+  private let refreshInterval: TimeInterval?
+  private let maxRefreshAttempts: Int
   private let content: (Image) -> Content
   private let placeholder: () -> Placeholder
 
@@ -20,10 +22,14 @@ public struct CachedAsyncImage<Content: View, Placeholder: View>: View {
 
   public init(url: URL?,
               maxCacheAge: TimeInterval? = nil,
+              refreshInterval: TimeInterval? = nil,
+              maxRefreshAttempts: Int = 0,
               @ViewBuilder content: @escaping (Image) -> Content,
               @ViewBuilder placeholder: @escaping () -> Placeholder) {
     self.url = url
     self.maxCacheAge = maxCacheAge
+    self.refreshInterval = refreshInterval
+    self.maxRefreshAttempts = maxRefreshAttempts
     self.content = content
     self.placeholder = placeholder
     // Seed synchronously from the memory cache so already-loaded images don't flash a placeholder.
@@ -43,6 +49,7 @@ public struct CachedAsyncImage<Content: View, Placeholder: View>: View {
     }
     .task(id: url) {
       await load(url)
+      await refreshVisibleImageUntilChanged(url)
     }
   }
 
@@ -62,6 +69,32 @@ public struct CachedAsyncImage<Content: View, Placeholder: View>: View {
        !Task.isCancelled, url == requestedURL {
       image = Image(platformImage: loaded)
       loadedURL = requestedURL
+    }
+  }
+
+  /// Periodically revalidates server-generated artwork while this view remains visible. Stop as
+  /// soon as the origin bytes change (the processing bitmap was replaced), when the view leaves the
+  /// hierarchy, or after the bounded retry window.
+  @MainActor
+  private func refreshVisibleImageUntilChanged(_ requestedURL: URL?) async {
+    guard let requestedURL,
+          let refreshInterval,
+          refreshInterval > 0,
+          maxRefreshAttempts > 0 else { return }
+    let delay = UInt64(min(refreshInterval, 3_600) * 1_000_000_000)
+
+    for _ in 0..<maxRefreshAttempts {
+      do {
+        try await Task.sleep(nanoseconds: delay)
+      } catch {
+        return
+      }
+      guard !Task.isCancelled, url == requestedURL else { return }
+      guard let refreshed = await ImageCache.shared.refreshImage(for: requestedURL) else { continue }
+      guard !Task.isCancelled, url == requestedURL else { return }
+      image = Image(platformImage: refreshed.image)
+      loadedURL = requestedURL
+      if refreshed.contentChanged { return }
     }
   }
 }

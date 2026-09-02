@@ -10,6 +10,9 @@ import SwiftUI
 import KinoPubUI
 import KinoPubBackend
 import KinoPubKit
+#if os(iOS)
+import UIKit
+#endif
 
 // MARK: - Embedded sections
 //
@@ -47,6 +50,9 @@ struct TabsNavigationView: View {
   /// Section the user was on before going offline, restored automatically on reconnect.
   @State private var sectionBeforeOffline: NavigationTabs?
   @State private var showReconnected = false
+#if os(iOS)
+  @State private var isKeyboardVisible = false
+#endif
 
   var placement: ToolbarPlacement {
 #if os(iOS)
@@ -57,20 +63,7 @@ struct TabsNavigationView: View {
   }
 
   var body: some View {
-    TabView(selection: $selectedTab) {
-      // Поиск · Я смотрю · Главная (center) · История · Ещё
-      searchTab
-      watchingTab
-      mainTab
-      historyTab
-      moreTab
-    }
-    .tint(Color.KinoPub.accent)
-#if os(iOS)
-    // TabView is UIKit-backed. Pin its chrome to dark so iOS 26 doesn't choose black selected-item
-    // content for the Liquid Glass selection capsule while the surrounding app stays dark.
-    .toolbarColorScheme(.dark, for: .tabBar)
-#endif
+    configuredTabs
     .safeAreaInset(edge: .top, spacing: 0) {
       if let banner = bannerState {
         OfflineBanner(tone: banner.tone, title: banner.title)
@@ -86,6 +79,14 @@ struct TabsNavigationView: View {
     .onReceive(NotificationCenter.default.publisher(for: .openDownloads)) { _ in
       selectedTab = .more
     }
+#if os(iOS)
+    .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+      isKeyboardVisible = true
+    }
+    .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+      isKeyboardVisible = false
+    }
+#endif
     .sheet(isPresented: $authState.shouldShowAuthentication, content: {
       AuthView(model: AuthModel(authService: appContext.authService,
                                 authState: authState,
@@ -98,6 +99,38 @@ struct TabsNavigationView: View {
         await authState.check()
       }
     }
+  }
+
+  private var tabs: some View {
+    TabView(selection: $selectedTab) {
+      // Поиск · Я смотрю · Главная (center) · История · Ещё
+      searchTab
+      watchingTab
+      mainTab
+      historyTab
+      moreTab
+    }
+  }
+
+  @ViewBuilder
+  private var configuredTabs: some View {
+#if os(iOS)
+    // The iOS 26 system Liquid Glass tab bar can erase the selected item's template image and title
+    // on a dark-only app, even when both SwiftUI tint and UITabBarAppearance are explicit. Own the
+    // five-button presentation so selection never changes the legibility of its content.
+    tabs
+      .toolbar(.hidden, for: .tabBar)
+      .safeAreaInset(edge: .bottom, spacing: 0) {
+        if !isKeyboardVisible {
+          KinoBottomTabBar(selection: $selectedTab)
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+        }
+      }
+      .animation(.easeInOut(duration: 0.2), value: isKeyboardVisible)
+#else
+    tabs
+    .tint(Color.KinoPub.accent)
+#endif
   }
 
   // MARK: - Offline mode
@@ -153,6 +186,9 @@ struct TabsNavigationView: View {
                                     authState: authState,
                                     errorHandler: errorHandler))
     }
+#if os(iOS)
+    .toolbar(.hidden, for: .tabBar)
+#endif
     .tag(NavigationTabs.search)
     .tabItem { Label("Search", systemImage: "magnifyingglass") }
     .toolbarBackground(Color.KinoPub.background, for: placement)
@@ -165,6 +201,9 @@ struct TabsNavigationView: View {
                                         errorHandler: errorHandler,
                                         tab: .watchlist))
     }
+#if os(iOS)
+    .toolbar(.hidden, for: .tabBar)
+#endif
     .tag(NavigationTabs.watching)
     .tabItem { Label("Watching", systemImage: "play.tv") }
     .toolbarBackground(Color.KinoPub.background, for: placement)
@@ -176,6 +215,9 @@ struct TabsNavigationView: View {
                                 authState: authState,
                                 errorHandler: errorHandler))
     }
+#if os(iOS)
+    .toolbar(.hidden, for: .tabBar)
+#endif
     .tag(NavigationTabs.main)
     .tabItem { Label("Home", systemImage: "house") }
     .toolbarBackground(Color.KinoPub.background, for: placement)
@@ -187,6 +229,9 @@ struct TabsNavigationView: View {
                                         authState: authState,
                                         errorHandler: errorHandler))
     }
+#if os(iOS)
+    .toolbar(.hidden, for: .tabBar)
+#endif
     .tag(NavigationTabs.history)
     .tabItem { Label("History", systemImage: "clock.arrow.circlepath") }
     .toolbarBackground(Color.KinoPub.background, for: placement)
@@ -194,11 +239,78 @@ struct TabsNavigationView: View {
 
   var moreTab: some View {
     MoreView()
+#if os(iOS)
+      .toolbar(.hidden, for: .tabBar)
+#endif
       .tag(NavigationTabs.more)
       .tabItem { Label("More", systemImage: "ellipsis") }
       .toolbarBackground(Color.KinoPub.background, for: placement)
   }
 }
+
+#if os(iOS)
+/// App-owned iPhone navigation bar. Keeping the glyph and title in the same SwiftUI hierarchy as
+/// the selection background avoids the iOS 26 UITabBar selected-item rendering regression seen on
+/// physical devices while retaining a familiar floating, translucent bar.
+private struct KinoBottomTabBar: View {
+  @Binding var selection: NavigationTabs
+
+  private struct Item: Identifiable {
+    let tab: NavigationTabs
+    let title: String
+    let systemImage: String
+
+    var id: NavigationTabs { tab }
+  }
+
+  private let items = [
+    Item(tab: .search, title: "Search", systemImage: "magnifyingglass"),
+    Item(tab: .watching, title: "Watching", systemImage: "play.tv"),
+    Item(tab: .main, title: "Home", systemImage: "house"),
+    Item(tab: .history, title: "History", systemImage: "clock.arrow.circlepath"),
+    Item(tab: .more, title: "More", systemImage: "ellipsis")
+  ]
+
+  var body: some View {
+    HStack(spacing: 2) {
+      ForEach(items) { item in
+        let isSelected = selection == item.tab
+        Button {
+          withAnimation(.easeOut(duration: 0.16)) {
+            selection = item.tab
+          }
+        } label: {
+          VStack(spacing: 3) {
+            Image(systemName: item.systemImage)
+              .symbolRenderingMode(.monochrome)
+              .font(.system(size: 20, weight: .semibold))
+            Text(item.title.localized)
+              .font(.system(size: 10, weight: .semibold))
+              .lineLimit(1)
+              .minimumScaleFactor(0.75)
+          }
+          .foregroundStyle(isSelected ? Color.KinoPub.accent : Color.KinoPub.text)
+          .frame(maxWidth: .infinity)
+          .frame(height: 52)
+          .background {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+              .fill(isSelected ? Color.white.opacity(0.16) : Color.clear)
+          }
+          .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(item.title.localized)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+      }
+    }
+    .padding(5)
+    .background(.ultraThinMaterial, in: Capsule())
+    .overlay(Capsule().strokeBorder(Color.white.opacity(0.12)).allowsHitTesting(false))
+    .padding(.horizontal, 18)
+    .padding(.vertical, 6)
+  }
+}
+#endif
 
 // MARK: - Custom "Ещё" — mirrors the iPad sidebar, one navigation bar per screen
 

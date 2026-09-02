@@ -20,6 +20,12 @@ public typealias KinoPlatformImage = NSImage
 
 public final class ImageCache {
 
+  public struct RefreshResult {
+    public let image: KinoPlatformImage
+    /// True when the origin returned different bytes from the image currently stored for this URL.
+    public let contentChanged: Bool
+  }
+
   /// Shared instance. Default time-to-live is ~6 months.
   public static let shared = ImageCache(ttl: 60 * 60 * 24 * 182)
 
@@ -28,12 +34,16 @@ public final class ImageCache {
   private let fileManager = FileManager.default
   private let directory: URL
   private let ttl: TimeInterval
+  private let session: URLSession
 
-  public init(ttl: TimeInterval) {
+  public init(ttl: TimeInterval,
+              session: URLSession = .shared,
+              cacheDirectory: URL? = nil) {
     self.ttl = ttl
+    self.session = session
     let caches = (try? fileManager.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true))
       ?? URL(fileURLWithPath: NSTemporaryDirectory())
-    directory = caches.appendingPathComponent("KinoPubImageCache", isDirectory: true)
+    directory = cacheDirectory ?? caches.appendingPathComponent("KinoPubImageCache", isDirectory: true)
     try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
     memory.countLimit = 300
   }
@@ -94,7 +104,7 @@ public final class ImageCache {
     // Short-lived artwork (episode thumbnails) must revalidate at the origin instead of accepting
     // URLCache's stale server-generated "processing" placeholder for the same URL.
     if maxAge != nil { request.cachePolicy = .reloadIgnoringLocalCacheData }
-    guard let (data, response) = try? await URLSession.shared.data(for: request),
+    guard let (data, response) = try? await session.data(for: request),
           (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? true,
           let image = KinoPlatformImage(data: data) else {
       return nil
@@ -103,6 +113,31 @@ public final class ImageCache {
     memoryDates.setObject(Date() as NSDate, forKey: nsKey)
     try? data.write(to: file, options: .atomic) // modification date = now
     return image
+  }
+
+  /// Revalidates an image at the origin even when its memory/disk entry is fresh. Kino.pub's
+  /// episode-thumbnail endpoint initially returns a real placeholder bitmap at the final URL, then
+  /// replaces it after frame extraction finishes, so cache expiry alone cannot update a visible row.
+  public func refreshImage(for url: URL) async -> RefreshResult? {
+    let nsKey = key(for: url) as NSString
+    let file = fileURL(for: url)
+    let previousData = try? Data(contentsOf: file)
+
+    var request = URLRequest(url: url)
+    request.cachePolicy = .reloadIgnoringLocalCacheData
+    request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+    request.setValue("no-cache", forHTTPHeaderField: "Pragma")
+    guard let (data, response) = try? await session.data(for: request),
+          (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? true,
+          let image = KinoPlatformImage(data: data) else {
+      return nil
+    }
+
+    memory.setObject(image, forKey: nsKey)
+    memoryDates.setObject(Date() as NSDate, forKey: nsKey)
+    try? data.write(to: file, options: .atomic)
+    return RefreshResult(image: image,
+                         contentChanged: previousData.map { $0 != data } ?? false)
   }
 
   // MARK: - Maintenance

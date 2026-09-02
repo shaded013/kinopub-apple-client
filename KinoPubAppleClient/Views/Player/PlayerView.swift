@@ -215,6 +215,7 @@ final class PlayerHostController: UIViewController {
   private var didAskResume = false
   private weak var playerController: AVPlayerViewController?
   private weak var episodeNavigationControls: EpisodeNavigationControlsView?
+  private var navigationControlsHideWorkItem: DispatchWorkItem?
 
   override func viewDidLoad() {
     super.viewDidLoad()
@@ -258,9 +259,18 @@ final class PlayerHostController: UIViewController {
     episodeNavigationControls = episodeControls
     updateEpisodeNavigationControls()
 
+    // Mirror the native controls' tap-to-show / tap-to-hide lifecycle without inspecting AVKit's
+    // private view hierarchy. The recognizer ignores UIControls and never cancels AVKit's gestures.
+    let interactionRecognizer = UITapGestureRecognizer(target: self,
+                                                        action: #selector(playerSurfaceTapped(_:)))
+    interactionRecognizer.cancelsTouchesInView = false
+    interactionRecognizer.delegate = self
+    controller.view.addGestureRecognizer(interactionRecognizer)
+
     present(controller, animated: true) { [weak self] in
       player.play()
       self?.presentResumeAlertIfNeeded()
+      self?.revealEpisodeNavigationControls()
     }
   }
 
@@ -279,7 +289,8 @@ final class PlayerHostController: UIViewController {
                                   canPlayNext: Bool,
                                   onPrevious: @escaping () -> Void,
                                   onNext: @escaping () -> Void) {
-    if self.playbackID != playbackID {
+    let playbackChanged = self.playbackID != playbackID
+    if playbackChanged {
       self.playbackID = playbackID
       didAskResume = false
     }
@@ -288,6 +299,9 @@ final class PlayerHostController: UIViewController {
     onPreviousEpisode = onPrevious
     onNextEpisode = onNext
     updateEpisodeNavigationControls()
+    if playbackChanged, episodeNavigationControls != nil {
+      revealEpisodeNavigationControls()
+    }
   }
 
   private func updateEpisodeNavigationControls() {
@@ -296,6 +310,33 @@ final class PlayerHostController: UIViewController {
     episodeNavigationControls?.onPrevious = onPreviousEpisode
     episodeNavigationControls?.onNext = onNextEpisode
     episodeNavigationControls?.updateAppearance()
+  }
+
+  @objc private func playerSurfaceTapped(_ recognizer: UITapGestureRecognizer) {
+    guard recognizer.state == .ended, let controls = episodeNavigationControls else { return }
+    if controls.controlsAreVisible {
+      hideEpisodeNavigationControls()
+    } else {
+      revealEpisodeNavigationControls()
+    }
+  }
+
+  private func revealEpisodeNavigationControls() {
+    guard canPlayPreviousEpisode || canPlayNextEpisode else { return }
+    navigationControlsHideWorkItem?.cancel()
+    episodeNavigationControls?.setControlsVisible(true, animated: true)
+
+    let workItem = DispatchWorkItem { [weak self] in
+      self?.hideEpisodeNavigationControls()
+    }
+    navigationControlsHideWorkItem = workItem
+    DispatchQueue.main.asyncAfter(deadline: .now() + 3.5, execute: workItem)
+  }
+
+  private func hideEpisodeNavigationControls() {
+    navigationControlsHideWorkItem?.cancel()
+    navigationControlsHideWorkItem = nil
+    episodeNavigationControls?.setControlsVisible(false, animated: true)
   }
 
   private static func timeString(_ time: TimeInterval) -> String {
@@ -315,6 +356,7 @@ private final class EpisodeNavigationControlsView: UIView {
   var canPlayNext = false
   var onPrevious: (() -> Void)?
   var onNext: (() -> Void)?
+  private(set) var controlsAreVisible = true
 
   private lazy var previousButton = makeButton(systemName: "backward.end.fill",
                                                accessibilityLabel: "Previous episode",
@@ -347,15 +389,36 @@ private final class EpisodeNavigationControlsView: UIView {
   }
 
   override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
-    previousButton.frame.contains(point) || nextButton.frame.contains(point)
+    guard controlsAreVisible, alpha > 0.01, !isHidden else { return false }
+    return previousButton.frame.contains(point) || nextButton.frame.contains(point)
   }
 
   func updateAppearance() {
-    isHidden = !canPlayPrevious && !canPlayNext
+    let hasAvailableAction = canPlayPrevious || canPlayNext
+    isHidden = !hasAvailableAction
+    alpha = hasAvailableAction && controlsAreVisible ? 1 : 0
     previousButton.isEnabled = canPlayPrevious
     nextButton.isEnabled = canPlayNext
     previousButton.alpha = canPlayPrevious ? 0.9 : 0.3
     nextButton.alpha = canPlayNext ? 0.9 : 0.3
+  }
+
+  func setControlsVisible(_ visible: Bool, animated: Bool) {
+    controlsAreVisible = visible
+    guard canPlayPrevious || canPlayNext else {
+      isHidden = true
+      alpha = 0
+      return
+    }
+
+    isHidden = false
+    layer.removeAllAnimations()
+    let changes = { self.alpha = visible ? 1 : 0 }
+    if animated {
+      UIView.animate(withDuration: 0.2, animations: changes)
+    } else {
+      changes()
+    }
   }
 
   private func makeButton(systemName: String,
@@ -381,6 +444,24 @@ private final class EpisodeNavigationControlsView: UIView {
 
   @objc private func playNext() {
     onNext?()
+  }
+}
+
+extension PlayerHostController: UIGestureRecognizerDelegate {
+  func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                         shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+    true
+  }
+
+  func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+    // A tap on AVKit's play, skip, scrubber, AirPlay, or subtitle controls is not a request to toggle
+    // our episode navigation. Background video taps continue to toggle both control layers together.
+    var touchedView = touch.view
+    while let view = touchedView {
+      if view is UIControl { return false }
+      touchedView = view.superview
+    }
+    return true
   }
 }
 
