@@ -41,9 +41,9 @@ final class DownloadFlowTests: XCTestCase {
 
   /// Full pipeline: start → byte progress → finish → file saved and removed from the active list.
   func testDownloadFlow_progressThenFinishSavesFile() {
-    let task = URLSessionDownloadTaskMock(url: url, resumeBlock: {})
+    let callbackTask = URLSession.shared.downloadTask(with: URLRequest(url: url))
     let download = manager.startDownload(url: url, withMetadata: metadata)
-    download.task = task
+    download.task = DownloadTaskMock()
 
     XCTAssertNotNil(manager.activeDownloads[url])
     XCTAssertEqual(download.state, .inProgress)
@@ -54,7 +54,7 @@ final class DownloadFlowTests: XCTestCase {
       .dropFirst()
       .sink { if $0 == 0.5 { progressExpectation.fulfill() } }
     manager.urlSession(manager.session,
-                       downloadTask: task,
+                       downloadTask: callbackTask,
                        didWriteData: 512,
                        totalBytesWritten: 512,
                        totalBytesExpectedToWrite: 1024)
@@ -63,7 +63,7 @@ final class DownloadFlowTests: XCTestCase {
 
     // Finishing saves the file to the documents directory and clears the active entry.
     let location = URL(fileURLWithPath: "/tmp/movie.mp4")
-    manager.urlSession(manager.session, downloadTask: task, didFinishDownloadingTo: location)
+    manager.urlSession(manager.session, downloadTask: callbackTask, didFinishDownloadingTo: location)
 
     XCTAssertTrue(fileSaver.didSaveFileCalled)
     XCTAssertEqual(fileSaver.savedFileSourceURL, location)

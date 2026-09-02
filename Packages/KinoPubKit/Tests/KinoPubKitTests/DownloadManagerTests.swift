@@ -46,7 +46,7 @@ class DownloadManagerTests: XCTestCase {
     let url = URL(string: "http://example.com/testfile.txt")!
 
     // Act
-    let downloadTaskMock = URLSessionDownloadTaskMock(url: url, resumeBlock: {})
+    let downloadTaskMock = DownloadTaskMock()
     let download = downloadManager.startDownload(url: url, withMetadata: metadata)
     download.task = downloadTaskMock
 
@@ -59,7 +59,7 @@ class DownloadManagerTests: XCTestCase {
   func testRemoveDownload() {
     // Arrange
     let url = URL(string: "http://example.com/testfile.txt")!
-    let downloadTaskMock = URLSessionDownloadTaskMock(url: url, resumeBlock: {})
+    let downloadTaskMock = DownloadTaskMock()
     let download = downloadManager.startDownload(url: url, withMetadata: metadata)
     download.task = downloadTaskMock
 
@@ -73,7 +73,7 @@ class DownloadManagerTests: XCTestCase {
   func testCompleteDownload() {
     // Arrange
     let url = URL(string: "http://example.com/testfile.txt")!
-    let downloadTaskMock = URLSessionDownloadTaskMock(url: url, resumeBlock: {})
+    let downloadTaskMock = DownloadTaskMock()
     let download = downloadManager.startDownload(url: url, withMetadata: metadata)
     download.task = downloadTaskMock
 
@@ -89,15 +89,15 @@ class DownloadManagerTests: XCTestCase {
     let url = URL(string: "http://example.com/testfile.txt")!
     let locationURL = URL(fileURLWithPath: "/path/to/temporary/location.txt")
 
-    let downloadTaskMock = URLSessionDownloadTaskMock(url: url) {}
+    let callbackTask = URLSession.shared.downloadTask(with: URLRequest(url: url))
 
     // Set the download task on the Download instance.
     let download = downloadManager.startDownload(url: url, withMetadata: metadata)
-    download.task = downloadTaskMock
+    download.task = DownloadTaskMock()
 
     // Act
     downloadManager.urlSession(downloadManager.session,
-                               downloadTask: downloadTaskMock,
+                               downloadTask: callbackTask,
                                didFinishDownloadingTo: locationURL)
 
     // Assert
@@ -112,9 +112,9 @@ class DownloadManagerTests: XCTestCase {
   func testDidWriteData_UpdatesProgress() {
     // Arrange
     let url = URL(string: "http://example.com/testfile.txt")!
-    let downloadTaskMock = URLSessionDownloadTaskMock(url: url, resumeBlock: {})
+    let callbackTask = URLSession.shared.downloadTask(with: URLRequest(url: url))
     let download = downloadManager.startDownload(url: url, withMetadata: metadata)
-    download.task = downloadTaskMock
+    download.task = DownloadTaskMock()
 
     let expectation = expectation(description: "progress updated")
     let cancellable = download.$progress
@@ -127,7 +127,7 @@ class DownloadManagerTests: XCTestCase {
 
     // Act
     downloadManager.urlSession(downloadManager.session,
-                               downloadTask: downloadTaskMock,
+                               downloadTask: callbackTask,
                                didWriteData: 1024,
                                totalBytesWritten: 1024,
                                totalBytesExpectedToWrite: 2048)
@@ -137,41 +137,45 @@ class DownloadManagerTests: XCTestCase {
     XCTAssertEqual(download.progress, 0.5)
     cancellable.cancel()
   }
+
+  func testBackgroundSession_UsesStableIdentifierAndLaunchEvents() {
+    XCTAssertEqual(downloadManager.session.configuration.identifier,
+                   DownloadManager<TestMeta>.backgroundSessionIdentifier)
+    XCTAssertTrue(downloadManager.session.configuration.sessionSendsLaunchEvents)
+    XCTAssertFalse(downloadManager.session.configuration.isDiscretionary)
+  }
+
+  func testHandleBackgroundEvents_CompletesWhenSessionFinishes() {
+    let completion = expectation(description: "background completion handler called")
+    var callCount = 0
+    downloadManager.handleBackgroundEvents {
+      callCount += 1
+      completion.fulfill()
+    }
+
+    downloadManager.urlSessionDidFinishEvents(forBackgroundURLSession: downloadManager.session)
+
+    wait(for: [completion], timeout: 1.0)
+    XCTAssertEqual(callCount, 1)
+  }
 }
 
 // MARK: - Mock Classes
 
-class URLSessionDownloadTaskMock: URLSessionDownloadTask {
-  typealias CompletionHandler = (URL?, URLResponse?, Error?) -> Void
-
-  private let completionHandler: CompletionHandler?
-  private let url: URL?
+final class DownloadTaskMock: DownloadTasking {
   private let resumeBlock: () -> Void
+  private let resumeData: Data?
 
-  init(url: URL? = nil, completionHandler: CompletionHandler? = nil, resumeBlock: @escaping () -> Void) {
-    self.url = url
-    self.completionHandler = completionHandler
+  init(resumeData: Data? = nil, resumeBlock: @escaping () -> Void = {}) {
+    self.resumeData = resumeData
     self.resumeBlock = resumeBlock
   }
 
-  override var originalRequest: URLRequest? {
-    if let url = url {
-      return URLRequest(url: url)
-    }
-    return nil
-  }
-
-  override func resume() {
+  func resume() {
     resumeBlock()
   }
 
-  override func cancel() {}
-
-  override func cancel(byProducingResumeData completionHandler: @escaping (Data?) -> Void) {
-    completionHandler(nil)
-  }
-
-  func triggerCompletion(with location: URL?, response: URLResponse?, error: Error?) {
-    completionHandler?(location, response, error)
+  func cancel(byProducingResumeData completionHandler: @escaping @Sendable (Data?) -> Void) {
+    completionHandler(resumeData)
   }
 }

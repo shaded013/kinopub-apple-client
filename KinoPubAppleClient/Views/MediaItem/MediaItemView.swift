@@ -1715,10 +1715,17 @@ struct ReviewCard: View {
       // Sentiment dot + author + date.
       HStack(spacing: 7) {
         Circle().fill(typeColor).frame(width: 7, height: 7)
-        Text(review.author ?? "Аноним".localized)
-          .font(.system(size: 13, weight: .semibold))
-          .foregroundStyle(Color.KinoPub.text)
-          .lineLimit(1)
+        if let author = review.author, !author.isEmpty {
+          Text(author)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(Color.KinoPub.text)
+            .lineLimit(1)
+        } else {
+          Text("Аноним".localized)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(Color.KinoPub.text)
+            .lineLimit(1)
+        }
         if let date = formattedDate {
           Text("·").font(.system(size: 12)).foregroundStyle(Color.KinoPub.subtitle)
           Text(date).font(.system(size: 12)).foregroundStyle(Color.KinoPub.subtitle)

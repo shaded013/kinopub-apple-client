@@ -18,7 +18,7 @@ struct BestVideoQualityFinder {
   
   #if os(iOS)
   private static var deviceCapabilitySize: CGFloat {
-    UIApplication.shared.statusBarOrientation.isLandscape ? UIScreen.main.bounds.width : UIScreen.main.bounds.height
+    max(UIScreen.main.bounds.width, UIScreen.main.bounds.height)
   }
   #endif
   

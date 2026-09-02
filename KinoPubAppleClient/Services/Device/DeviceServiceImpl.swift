@@ -56,9 +56,15 @@ final class DeviceServiceImpl: DeviceService {
     let hardware: String
     let software: String
 #if os(iOS)
-    title = UIDevice.current.name
-    hardware = "\(UIDevice.current.model) (\(Self.machineModel))"
-    software = "\(UIDevice.current.systemName) \(UIDevice.current.systemVersion)"
+    let deviceDescription = await MainActor.run {
+      let device = UIDevice.current
+      return (device.name,
+              "\(device.model) (\(Self.machineModel))",
+              "\(device.systemName) \(device.systemVersion)")
+    }
+    title = deviceDescription.0
+    hardware = deviceDescription.1
+    software = deviceDescription.2
 #elseif os(macOS)
     title = Host.current().localizedName ?? "Mac"
     hardware = Self.machineModel

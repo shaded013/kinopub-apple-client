@@ -9,6 +9,13 @@ import Foundation
 import KinoPubLogging
 import OSLog
 
+protocol DownloadTasking: AnyObject {
+  func resume()
+  func cancel(byProducingResumeData completionHandler: @escaping @Sendable (Data?) -> Void)
+}
+
+extension URLSessionDownloadTask: DownloadTasking {}
+
 /// `Download` represents a downloadable resource. It provides methods for controlling the download,
 /// such as pausing and resuming, and notifies about the progress through a progress handler.
 public class Download<Meta: Codable & Equatable>: ObservableObject {
@@ -49,7 +56,7 @@ public class Download<Meta: Codable & Equatable>: ObservableObject {
   public let metadata: Meta
 
   // - Internal
-  internal var task: URLSessionDownloadTask?
+  internal var task: (any DownloadTasking)?
 
   /// Resume data produced when the download is paused. Exposed so the manager can persist it
   /// and restore paused downloads across app launches.

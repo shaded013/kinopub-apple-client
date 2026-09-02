@@ -315,30 +315,34 @@ class PlayerManager: ObservableObject {
   private func applyPreferredAudio() {
     guard watchMode == .media,
           let item = player.currentItem,
-          let group = item.asset.mediaSelectionGroup(forMediaCharacteristic: .audible),
           let preference = AppContext.shared.libraryState.audioPreference(itemId: playItem.metadata.id)
     else { return }
-    let options = group.options
-    let match = options.first(where: { $0.displayName == preference.displayName })
-      ?? options.first(where: { $0.extendedLanguageTag != nil && $0.extendedLanguageTag == preference.languageTag })
-      ?? (options.indices.contains(preference.index) ? options[preference.index] : nil)
-    if let match {
-      item.select(match, in: group)
+    Task { @MainActor in
+      guard let group = try? await item.asset.loadMediaSelectionGroup(for: .audible) else { return }
+      let options = group.options
+      let match = options.first(where: { $0.displayName == preference.displayName })
+        ?? options.first(where: { $0.extendedLanguageTag != nil && $0.extendedLanguageTag == preference.languageTag })
+        ?? (options.indices.contains(preference.index) ? options[preference.index] : nil)
+      if let match {
+        item.select(match, in: group)
+      }
     }
   }
 
   /// Remember the audio option currently selected in the player, so the next episode/launch resumes it.
   private func captureCurrentAudio() {
     guard watchMode == .media,
-          let item = player.currentItem,
-          let group = item.asset.mediaSelectionGroup(forMediaCharacteristic: .audible),
-          let selected = item.currentMediaSelection.selectedMediaOption(in: group),
-          let index = group.options.firstIndex(of: selected)
-    else { return }
-    let preference = MediaLibraryStore.AudioPreference(displayName: selected.displayName,
-                                                       languageTag: selected.extendedLanguageTag,
-                                                       index: index)
-    AppContext.shared.libraryState.setAudioPreference(itemId: playItem.metadata.id, preference)
+          let item = player.currentItem else { return }
+    Task { @MainActor in
+      guard let group = try? await item.asset.loadMediaSelectionGroup(for: .audible),
+            let selected = item.currentMediaSelection.selectedMediaOption(in: group),
+            let index = group.options.firstIndex(of: selected)
+      else { return }
+      let preference = MediaLibraryStore.AudioPreference(displayName: selected.displayName,
+                                                         languageTag: selected.extendedLanguageTag,
+                                                         index: index)
+      AppContext.shared.libraryState.setAudioPreference(itemId: playItem.metadata.id, preference)
+    }
   }
   
   // MARK: - Watch marks

@@ -137,7 +137,9 @@ private extension View {
                                set: { if !$0 { error.wrappedValue = nil } })) {
       Button("OK", role: .cancel) { onDismiss() }
     } message: {
-      Text(error.wrappedValue ?? "")
+      if let message = error.wrappedValue {
+        Text(message)
+      }
     }
   }
 }

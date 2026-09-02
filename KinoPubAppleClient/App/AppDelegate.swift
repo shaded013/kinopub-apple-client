@@ -7,6 +7,7 @@
 
 import Foundation
 import SwiftUI
+import KinoPubKit
 import KinoPubUI
 
 #if os(iOS)
@@ -31,7 +32,16 @@ class AppDelegate: NSObject, UIApplicationDelegate {
   func application(_ application: UIApplication,
                    handleEventsForBackgroundURLSession identifier: String,
                    completionHandler: @escaping () -> Void) {
-    AppContext.shared.downloadManager.backgroundCompletionHandler = completionHandler
+    switch identifier {
+    case DownloadManager<DownloadMeta>.backgroundSessionIdentifier:
+      AppContext.shared.downloadManager.handleBackgroundEvents(completionHandler: completionHandler)
+    case HLSAssetDownloadManager.backgroundSessionIdentifier:
+      AppContext.shared.hlsDownloadManager.handleBackgroundEvents(completionHandler: completionHandler)
+    default:
+      // The system expects every wake-up to be acknowledged, even if the session belongs to an
+      // older app version or is otherwise unknown.
+      completionHandler()
+    }
   }
 }
 #endif

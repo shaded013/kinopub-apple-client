@@ -57,7 +57,7 @@ final class DownloadTests: XCTestCase {
 
     // Replace the real background task with a mock whose resume-data callback
     // fires synchronously, so the paused state transition is deterministic.
-    download.task = URLSessionDownloadTaskMock(url: url, resumeBlock: {})
+    download.task = DownloadTaskMock()
 
     download.pause()
 

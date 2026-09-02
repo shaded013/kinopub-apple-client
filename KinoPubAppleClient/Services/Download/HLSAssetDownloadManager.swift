@@ -73,6 +73,8 @@ enum HLSDownloadKey {
 
 public final class HLSAssetDownloadManager: NSObject, ObservableObject, AVAssetDownloadDelegate {
 
+  public static let backgroundSessionIdentifier = "com.kinopub.hlsDownloadSession"
+
   /// In-flight downloads keyed by `HLSDownloadKey`.
   @Published public private(set) var activeDownloads: [HLSActiveDownload] = []
   /// Downloads whose background task didn't survive a force-quit — shown so the user can re-download.
@@ -112,6 +114,7 @@ public final class HLSAssetDownloadManager: NSObject, ObservableObject, AVAssetD
   private var contexts: [Int: TaskContext] = [:]   // keyed by task.taskIdentifier
   /// kino.pub rate-limits (HTTP 429) aggressive HLS downloads; we retry with backoff this many times.
   private let maxRetries = 5
+  private var backgroundCompletionHandler: (() -> Void)?
 
   /// Persisted record of an in-flight download so it can be resumed (background task survived) or
   /// re-offered (force-quit) after a relaunch — the system keeps the task, but the meta lives only in
@@ -178,7 +181,10 @@ public final class HLSAssetDownloadManager: NSObject, ObservableObject, AVAssetD
   }
 
   private lazy var session: AVAssetDownloadURLSession = {
-    let config = URLSessionConfiguration.background(withIdentifier: "com.kinopub.hlsDownloadSession")
+    let config = URLSessionConfiguration.background(withIdentifier: Self.backgroundSessionIdentifier)
+    config.isDiscretionary = false
+    config.sessionSendsLaunchEvents = true
+    config.allowsCellularAccess = true
     return AVAssetDownloadURLSession(configuration: config,
                                      assetDownloadDelegate: self,
                                      delegateQueue: .main)
@@ -186,10 +192,17 @@ public final class HLSAssetDownloadManager: NSObject, ObservableObject, AVAssetD
 
   // MARK: - Public API
 
+  /// Reattaches the background AVAsset session after iOS wakes or relaunches the app and retains
+  /// the system completion handler until AVFoundation finishes delivering all pending events.
+  public func handleBackgroundEvents(completionHandler: @escaping () -> Void) {
+    backgroundCompletionHandler = completionHandler
+    _ = session
+  }
+
   /// Starts (or no-ops if already running) an HLS download of `hlsURL` for `meta`, returning what
   /// happened so the caller can tell the user (including *why* it didn't start).
   @discardableResult
-  public func startDownload(meta: DownloadMeta, hlsURL: URL) -> HLSDownloadStartResult {
+  public func startDownload(meta: DownloadMeta, hlsURL: URL) async -> HLSDownloadStartResult {
     let key = HLSDownloadKey.make(for: meta)
 
     // Already downloading?
@@ -202,7 +215,7 @@ public final class HLSAssetDownloadManager: NSObject, ObservableObject, AVAssetD
       Logger.kit.debug("[HLS] asset already downloaded for key \(key)")
       return .alreadyDownloaded
     }
-    return launch(meta: meta, hlsURL: hlsURL, retryCount: 0)
+    return await launch(meta: meta, hlsURL: hlsURL, retryCount: 0)
       ? .started
       : .failed(lastError ?? "Couldn't start download".localized)
   }
@@ -211,15 +224,26 @@ public final class HLSAssetDownloadManager: NSObject, ObservableObject, AVAssetD
   /// subtitle track; the final attempt narrows to the preferred selection (video + default audio) so
   /// a heavily rate-limited title can still complete rather than failing outright.
   @discardableResult
-  private func launch(meta: DownloadMeta, hlsURL: URL, retryCount: Int) -> Bool {
+  private func launch(meta: DownloadMeta, hlsURL: URL, retryCount: Int) async -> Bool {
     let key = HLSDownloadKey.make(for: meta)
     let asset = AVURLAsset(url: hlsURL)
     let narrow = retryCount >= maxRetries - 1
 
+    let preferredSelection: AVMediaSelection
+    do {
+      preferredSelection = try await asset.load(.preferredMediaSelection)
+    } catch {
+      Logger.kit.error("[HLS] failed to load media selections for key \(key): \(error)")
+      lastError = String(format: "Couldn't start downloading “%@”: %@".localized,
+                         meta.notificationTitle, error.localizedDescription)
+      onDownloadFailed?(meta)
+      return false
+    }
+
     var mediaSelections: [AVMediaSelection] = []
-    if !narrow, let baseSelection = asset.preferredMediaSelection.mutableCopy() as? AVMutableMediaSelection {
+    if !narrow, let baseSelection = preferredSelection.mutableCopy() as? AVMutableMediaSelection {
       for characteristic in [AVMediaCharacteristic.audible, .legible] {
-        guard let group = asset.mediaSelectionGroup(forMediaCharacteristic: characteristic) else { continue }
+        guard let group = try? await asset.loadMediaSelectionGroup(for: characteristic) else { continue }
         for option in group.options {
           guard let selection = baseSelection.mutableCopy() as? AVMutableMediaSelection else { continue }
           selection.select(option, in: group)
@@ -228,7 +252,7 @@ public final class HLSAssetDownloadManager: NSObject, ObservableObject, AVAssetD
       }
     }
     // Always include the preferred selection (video + default tracks).
-    mediaSelections.append(asset.preferredMediaSelection)
+    mediaSelections.append(preferredSelection)
 
     var options: [String: Any] = [:]
     if let maxResolution = maxResolutionProvider() {
@@ -332,16 +356,7 @@ public final class HLSAssetDownloadManager: NSObject, ObservableObject, AVAssetD
   /// A stable identifier for a media selection (its chosen audio + subtitle options), so progress
   /// callbacks for the same selection update one bucket instead of creating a new one each time.
   private static func selectionKey(for selection: AVMediaSelection) -> String {
-    guard let asset = selection.asset else { return "default" }
-    var parts: [String] = []
-    for characteristic in [AVMediaCharacteristic.audible, .legible] {
-      if let group = asset.mediaSelectionGroup(forMediaCharacteristic: characteristic) {
-        parts.append(selection.selectedMediaOption(in: group)?.displayName ?? "-")
-      } else {
-        parts.append("-")
-      }
-    }
-    return parts.joined(separator: "|")
+    String(describing: selection)
   }
 
   // MARK: - AVAssetDownloadDelegate
@@ -447,7 +462,7 @@ public final class HLSAssetDownloadManager: NSObject, ObservableObject, AVAssetD
         Logger.kit.error("[HLS] rate-limited (429) for key \(key); retry \(next + 1) in \(seconds)s")
         Task { @MainActor [weak self] in
           try? await Task.sleep(nanoseconds: seconds * 1_000_000_000)
-          self?.launch(meta: ctx.meta, hlsURL: ctx.hlsURL, retryCount: next)
+          await self?.launch(meta: ctx.meta, hlsURL: ctx.hlsURL, retryCount: next)
         }
         return  // keep the active row visible while we wait
       }
@@ -479,6 +494,15 @@ public final class HLSAssetDownloadManager: NSObject, ObservableObject, AVAssetD
     onDownloadFinished?(ctx.meta)
   }
 
+  public func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
+    Logger.kit.debug("[HLS] background session finished events")
+    DispatchQueue.main.async {
+      let handler = self.backgroundCompletionHandler
+      self.backgroundCompletionHandler = nil
+      handler?()
+    }
+  }
+
   // MARK: - Resume / re-download after relaunch
 
   /// Re-download an interrupted item from scratch (deleting any stale partial first).
@@ -490,7 +514,9 @@ public final class HLSAssetDownloadManager: NSObject, ObservableObject, AVAssetD
     }
     deletePartial(entry)
     interrupted.removeAll { $0.id == key }
-    launch(meta: entry.meta, hlsURL: url, retryCount: 0)
+    Task { @MainActor [weak self] in
+      await self?.launch(meta: entry.meta, hlsURL: url, retryCount: 0)
+    }
   }
 
   /// Drop an interrupted item and clean up its partial `.movpkg`.
@@ -520,7 +546,7 @@ public final class HLSAssetDownloadManager: ObservableObject {
               maxResolutionProvider: @escaping () -> Int? = { nil }) {}
 
   @discardableResult
-  public func startDownload(meta: DownloadMeta, hlsURL: URL) -> HLSDownloadStartResult {
+  public func startDownload(meta: DownloadMeta, hlsURL: URL) async -> HLSDownloadStartResult {
     Logger.kit.debug("[HLS] HLS downloads are not supported on this platform; ignoring.")
     return .failed("HLS downloads are not supported on this platform.")
   }

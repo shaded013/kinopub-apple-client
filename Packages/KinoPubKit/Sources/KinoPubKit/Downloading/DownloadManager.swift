@@ -25,6 +25,10 @@ public protocol DownloadFileNaming {
 }
 
 public class DownloadManager<Meta: Codable & Equatable>: NSObject, URLSessionDownloadDelegate, DownloadManaging {
+  public static var backgroundSessionIdentifier: String {
+    "com.kinopub.backgroundDownloadSession"
+  }
+
   @Published public var activeDownloads: [URL: Download<Meta>] = [:]
   private var fileSaver: FileSaving
   private var database: DownloadedFilesDatabase<Meta>
@@ -32,7 +36,7 @@ public class DownloadManager<Meta: Codable & Equatable>: NSObject, URLSessionDow
 
   /// Completion handler stored by the app delegate when the system relaunches the app to finish
   /// background URLSession events. Invoked once the session reports it finished delivering events.
-  public var backgroundCompletionHandler: (() -> Void)?
+  private var backgroundCompletionHandler: (() -> Void)?
 
   /// Invoked on the main thread when a download finishes successfully. The app uses this to post a
   /// local notification and to advance season-download groups. Kept generic so KinoPubKit stays
@@ -53,8 +57,7 @@ public class DownloadManager<Meta: Codable & Equatable>: NSObject, URLSessionDow
   }
 
   lazy public var session: URLSession = {
-    let identifier = "com.kinopub.backgroundDownloadSession"
-    let config = URLSessionConfiguration.background(withIdentifier: identifier)
+    let config = URLSessionConfiguration.background(withIdentifier: Self.backgroundSessionIdentifier)
     // Without this the system treats background transfers as discretionary and may defer them
     // indefinitely (downloads appear stuck / never start, especially in the simulator).
     config.isDiscretionary = false
@@ -62,6 +65,13 @@ public class DownloadManager<Meta: Codable & Equatable>: NSObject, URLSessionDow
     config.allowsCellularAccess = true
     return URLSession(configuration: config, delegate: self, delegateQueue: nil)
   }()
+
+  /// Reattaches the background session after the system wakes or relaunches the app and retains
+  /// the completion handler until URLSession finishes delivering all pending events.
+  public func handleBackgroundEvents(completionHandler: @escaping () -> Void) {
+    backgroundCompletionHandler = completionHandler
+    _ = session
+  }
 
   public func startDownload(url: URL, withMetadata metadata: Meta) -> Download<Meta> {
     let download = Download(url: url, metadata: metadata, manager: self)

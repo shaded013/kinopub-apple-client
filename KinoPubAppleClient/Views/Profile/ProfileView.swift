@@ -204,7 +204,7 @@ struct ProfileView: View {
         Spacer()
         Picker("", selection: $selectedLanguage) {
           ForEach(model.availableLanguages.keys.sorted(), id: \.self) { key in
-            Text(model.availableLanguages[key] ?? key).tag(key)
+            Text(model.availableLanguages[key]!).tag(key)
           }
         }
         .labelsHidden()
