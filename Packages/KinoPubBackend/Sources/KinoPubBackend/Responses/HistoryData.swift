@@ -51,6 +51,12 @@ public struct HistoryItem: Codable, Hashable, Identifiable {
 
   public var id: Int { item.id }
 
+  /// Best available server timestamp for when this history entry was viewed.
+  public var viewedAt: Date? {
+    guard let timestamp = lastSeen ?? time ?? firstSeen, timestamp > 0 else { return nil }
+    return Date(timeIntervalSince1970: timestamp)
+  }
+
   /// Stable, collision-free id for `ForEach` (a series can appear in several entries with the
   /// same `item.id`, which broke grid rendering — gaps/recycling — when keyed by `id` alone).
   public var uniqueID: String {

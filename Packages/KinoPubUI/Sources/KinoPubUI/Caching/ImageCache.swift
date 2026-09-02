@@ -24,6 +24,7 @@ public final class ImageCache {
   public static let shared = ImageCache(ttl: 60 * 60 * 24 * 182)
 
   private let memory = NSCache<NSString, KinoPlatformImage>()
+  private let memoryDates = NSCache<NSString, NSDate>()
   private let fileManager = FileManager.default
   private let directory: URL
   private let ttl: TimeInterval
@@ -51,24 +52,36 @@ public final class ImageCache {
   // MARK: - Reads
 
   /// Synchronous memory-only lookup (cheap; safe to call during view updates).
-  public func cachedImage(for url: URL) -> KinoPlatformImage? {
-    memory.object(forKey: key(for: url) as NSString)
+  public func cachedImage(for url: URL, maxAge: TimeInterval? = nil) -> KinoPlatformImage? {
+    let nsKey = key(for: url) as NSString
+    guard let image = memory.object(forKey: nsKey) else { return nil }
+    guard let maxAge else { return image }
+    guard let storedAt = memoryDates.object(forKey: nsKey),
+          Date().timeIntervalSince(storedAt as Date) < maxAge else {
+      memory.removeObject(forKey: nsKey)
+      memoryDates.removeObject(forKey: nsKey)
+      return nil
+    }
+    return image
   }
 
   /// Returns a fresh image from memory, disk (if not expired), or the network.
-  public func image(for url: URL) async -> KinoPlatformImage? {
+  public func image(for url: URL, maxAge: TimeInterval? = nil) async -> KinoPlatformImage? {
     let nsKey = key(for: url) as NSString
-    if let image = memory.object(forKey: nsKey) {
+    if let image = cachedImage(for: url, maxAge: maxAge) {
       return image
     }
+
+    let effectiveTTL = min(ttl, maxAge ?? ttl)
 
     let file = fileURL(for: url)
     if let attrs = try? fileManager.attributesOfItem(atPath: file.path),
        let modified = attrs[.modificationDate] as? Date {
-      if Date().timeIntervalSince(modified) < ttl,
+      if Date().timeIntervalSince(modified) < effectiveTTL,
          let data = try? Data(contentsOf: file),
          let image = KinoPlatformImage(data: data) {
         memory.setObject(image, forKey: nsKey)
+        memoryDates.setObject(modified as NSDate, forKey: nsKey)
         return image
       } else {
         try? fileManager.removeItem(at: file) // expired
@@ -77,12 +90,17 @@ public final class ImageCache {
 
     // Reject non-2xx responses (e.g. the actor portrait CDN returns 403 for a missing photo) so the
     // caller falls back to its placeholder (initials) instead of a default/error body.
-    guard let (data, response) = try? await URLSession.shared.data(from: url),
+    var request = URLRequest(url: url)
+    // Short-lived artwork (episode thumbnails) must revalidate at the origin instead of accepting
+    // URLCache's stale server-generated "processing" placeholder for the same URL.
+    if maxAge != nil { request.cachePolicy = .reloadIgnoringLocalCacheData }
+    guard let (data, response) = try? await URLSession.shared.data(for: request),
           (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? true,
           let image = KinoPlatformImage(data: data) else {
       return nil
     }
     memory.setObject(image, forKey: nsKey)
+    memoryDates.setObject(Date() as NSDate, forKey: nsKey)
     try? data.write(to: file, options: .atomic) // modification date = now
     return image
   }
@@ -92,6 +110,7 @@ public final class ImageCache {
   /// Removes every cached entry (memory + disk).
   public func clear() {
     memory.removeAllObjects()
+    memoryDates.removeAllObjects()
     if let items = try? fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) {
       for item in items { try? fileManager.removeItem(at: item) }
     }

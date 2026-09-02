@@ -65,7 +65,12 @@ struct TabsNavigationView: View {
       historyTab
       moreTab
     }
-    .accentColor(Color.KinoPub.accent)
+    .tint(Color.KinoPub.accent)
+#if os(iOS)
+    // TabView is UIKit-backed. Pin its chrome to dark so iOS 26 doesn't choose black selected-item
+    // content for the Liquid Glass selection capsule while the surrounding app stays dark.
+    .toolbarColorScheme(.dark, for: .tabBar)
+#endif
     .safeAreaInset(edge: .top, spacing: 0) {
       if let banner = bannerState {
         OfflineBanner(tone: banner.tone, title: banner.title)
@@ -235,6 +240,7 @@ struct MoreView: View {
       .listStyle(.insetGrouped)
 #endif
       .scrollContentBackground(.hidden)
+      .tint(Color.KinoPub.text)
       .kinoScreen("More".localized)
       // Sections push as bare content onto this one stack (swipe-back + single bar). Details pushed
       // from inside them are Route values handled by .routeDestinations().

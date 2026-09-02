@@ -159,6 +159,34 @@ final class ModelDecodingTests: XCTestCase {
     XCTAssertEqual(episode.fixedTitle, "Серия 5")
   }
 
+  // MARK: - History
+
+  func testHistoryItem_ViewedAtPrefersLastSeen() {
+    let item = HistoryItem(time: 100,
+                           counter: nil,
+                           firstSeen: 50,
+                           lastSeen: 200,
+                           item: .mock())
+
+    XCTAssertEqual(item.viewedAt?.timeIntervalSince1970, 200)
+  }
+
+  func testHistoryItem_ViewedAtFallsBackAndRejectsInvalidTimestamp() {
+    let firstSeen = HistoryItem(time: nil,
+                                counter: nil,
+                                firstSeen: 50,
+                                lastSeen: nil,
+                                item: .mock())
+    let invalid = HistoryItem(time: 0,
+                              counter: nil,
+                              firstSeen: nil,
+                              lastSeen: nil,
+                              item: .mock())
+
+    XCTAssertEqual(firstSeen.viewedAt?.timeIntervalSince1970, 50)
+    XCTAssertNil(invalid.viewedAt)
+  }
+
   // MARK: - Season
 
   func testSeason_DecodesWithEpisodes() throws {

@@ -60,8 +60,7 @@ class HistoryModel: ObservableObject {
     var buckets: [Date: [HistoryItem]] = [:]
 
     for historyItem in filteredHistoryItems {
-      let timestamp = historyItem.lastSeen ?? historyItem.time ?? 0
-      let day = calendar.startOfDay(for: Date(timeIntervalSince1970: timestamp))
+      let day = calendar.startOfDay(for: historyItem.viewedAt ?? .distantPast)
       if buckets[day] == nil {
         buckets[day] = []
         order.append(day)

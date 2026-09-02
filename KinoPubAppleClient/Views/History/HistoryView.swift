@@ -177,6 +177,16 @@ struct HistoryItemCell: View {
             .font(.system(size: 14.0, weight: .medium))
             .foregroundStyle(Color.KinoPub.subtitle)
         }
+        if let viewedAt = historyItem.viewedAt {
+          Label {
+            Text(viewedAt.formatted(date: .abbreviated, time: .shortened))
+          } icon: {
+            Image(systemName: "clock")
+          }
+          .lineLimit(1)
+          .font(.system(size: 12.0, weight: .medium))
+          .foregroundStyle(Color.KinoPub.subtitle)
+        }
       }
       .padding(.horizontal, 8)
     }

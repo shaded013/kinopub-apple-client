@@ -92,6 +92,8 @@ struct SearchView: View {
       TextField("Shows & Movies".localized, text: $model.query)
         .textFieldStyle(.plain)
         .foregroundStyle(Color.KinoPub.text)
+        // Explicit tint keeps the insertion caret visible in the dark glass field on iOS 26.
+        .tint(Color.KinoPub.accent)
         .focused($searchFocused)
         .submitLabel(.search)
         .autocorrectionDisabled()

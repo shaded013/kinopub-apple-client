@@ -78,7 +78,10 @@ public struct EpisodeCard: View {
   }
 
   private var thumbnail: some View {
-    CachedAsyncImage(url: URL(string: imageURL ?? "")) { image in
+    // kino.pub serves a valid "processing" bitmap at the final thumbnail URL while artwork is
+    // generated. A long-lived cache made that temporary image permanent for six months. Episode
+    // art gets a short lifetime so revisiting the shelf fetches the finished frame.
+    CachedAsyncImage(url: URL(string: imageURL ?? ""), maxCacheAge: 60) { image in
       image
         .resizable()
         .renderingMode(.original)
