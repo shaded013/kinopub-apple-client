@@ -249,6 +249,11 @@ struct TabsNavigationView: View {
 }
 
 #if os(iOS)
+private enum KinoBottomBarLayout {
+  /// Button height (52) + the bar's inner (10) and outer (12) vertical padding.
+  static let contentHeight: CGFloat = 74
+}
+
 /// App-owned iPhone navigation bar. Keeping the glyph and title in the same SwiftUI hierarchy as
 /// the selection background avoids the iOS 26 UITabBar selected-item rendering regression seen on
 /// physical devices while retaining a familiar floating, translucent bar.
@@ -366,6 +371,17 @@ struct MoreView: View {
           }
           .textCase(nil)
         }
+#if os(iOS)
+        // A List nested in TabView does not consistently consume the parent's custom
+        // safe-area inset on physical iPhones. Keep enough trailing scroll content for
+        // Profile and the version footer to move fully above the floating bottom bar.
+        Color.clear
+          .frame(height: KinoBottomBarLayout.contentHeight)
+          .listRowInsets(EdgeInsets())
+          .listRowBackground(Color.clear)
+          .listRowSeparator(.hidden)
+          .accessibilityHidden(true)
+#endif
       }
 #if os(iOS)
       .listStyle(.insetGrouped)
