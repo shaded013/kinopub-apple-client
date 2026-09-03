@@ -79,11 +79,11 @@ public struct EpisodeCard: View {
 
   private var thumbnail: some View {
     // kino.pub serves a valid "processing" bitmap at the final thumbnail URL while artwork is
-    // generated. Revalidate visible cards until the origin bytes change, rather than requiring the
+    // generated. Revalidate visible cards through a bounded retry window, rather than requiring the
     // user to leave this screen before the short cache lifetime is noticed.
     CachedAsyncImage(url: URL(string: imageURL ?? ""),
-                     maxCacheAge: 20,
-                     refreshInterval: 20,
+                     maxCacheAge: 15,
+                     refreshInterval: 15,
                      maxRefreshAttempts: 12) { image in
       image
         .resizable()

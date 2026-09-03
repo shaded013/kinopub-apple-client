@@ -49,7 +49,7 @@ public struct CachedAsyncImage<Content: View, Placeholder: View>: View {
     }
     .task(id: url) {
       await load(url)
-      await refreshVisibleImageUntilChanged(url)
+      await refreshVisibleImage(url)
     }
   }
 
@@ -72,11 +72,11 @@ public struct CachedAsyncImage<Content: View, Placeholder: View>: View {
     }
   }
 
-  /// Periodically revalidates server-generated artwork while this view remains visible. Stop as
-  /// soon as the origin bytes change (the processing bitmap was replaced), when the view leaves the
-  /// hierarchy, or after the bounded retry window.
+  /// Periodically revalidates server-generated artwork while this view remains visible. Keep the
+  /// bounded retry window running even after bytes change: a CDN may re-encode the same visual
+  /// "processing" placeholder, which is not proof that final episode artwork is ready.
   @MainActor
-  private func refreshVisibleImageUntilChanged(_ requestedURL: URL?) async {
+  private func refreshVisibleImage(_ requestedURL: URL?) async {
     guard let requestedURL,
           let refreshInterval,
           refreshInterval > 0,
@@ -94,7 +94,6 @@ public struct CachedAsyncImage<Content: View, Placeholder: View>: View {
       guard !Task.isCancelled, url == requestedURL else { return }
       image = Image(platformImage: refreshed.image)
       loadedURL = requestedURL
-      if refreshed.contentChanged { return }
     }
   }
 }

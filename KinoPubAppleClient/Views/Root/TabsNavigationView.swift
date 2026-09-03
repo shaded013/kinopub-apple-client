@@ -255,6 +255,13 @@ struct TabsNavigationView: View {
 private struct KinoBottomTabBar: View {
   @Binding var selection: NavigationTabs
 
+  /// Keep the selected state independent of asset-catalog/tint resolution. The iOS 26 system tab
+  /// bar regression that prompted this custom bar was only reproducible on physical devices, so a
+  /// literal high-contrast fill is intentional here.
+  private let selectedBackground = Color(red: 107.0 / 255.0,
+                                         green: 199.0 / 255.0,
+                                         blue: 136.0 / 255.0)
+
   private struct Item: Identifiable {
     let tab: NavigationTabs
     let title: String
@@ -284,17 +291,18 @@ private struct KinoBottomTabBar: View {
             Image(systemName: item.systemImage)
               .symbolRenderingMode(.monochrome)
               .font(.system(size: 20, weight: .semibold))
+              .foregroundStyle(isSelected ? Color.white : Color.KinoPub.text)
             Text(item.title.localized)
               .font(.system(size: 10, weight: .semibold))
               .lineLimit(1)
               .minimumScaleFactor(0.75)
+              .foregroundStyle(isSelected ? Color.white : Color.KinoPub.text)
           }
-          .foregroundStyle(isSelected ? Color.KinoPub.accent : Color.KinoPub.text)
           .frame(maxWidth: .infinity)
           .frame(height: 52)
           .background {
             RoundedRectangle(cornerRadius: 20, style: .continuous)
-              .fill(isSelected ? Color.white.opacity(0.16) : Color.clear)
+              .fill(isSelected ? selectedBackground : Color.clear)
           }
           .contentShape(Rectangle())
         }
@@ -346,7 +354,18 @@ struct MoreView: View {
             if visibility.isVisible(item) { sectionRow(item) }
           }
         }
-        Section { sectionRow(.profile) }
+        Section {
+          sectionRow(.profile)
+        } footer: {
+          HStack {
+            Spacer()
+            Text(appVersionLabel)
+              .font(.caption2)
+              .foregroundStyle(Color.KinoPub.subtitle)
+            Spacer()
+          }
+          .textCase(nil)
+        }
       }
 #if os(iOS)
       .listStyle(.insetGrouped)
@@ -372,6 +391,12 @@ struct MoreView: View {
     .onReceive(NotificationCenter.default.publisher(for: .openDownloads)) { _ in
       path = NavigationPath([SidebarItem.downloads])
     }
+  }
+
+  private var appVersionLabel: String {
+    let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
+    let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "—"
+    return "Version \(version) (\(build))"
   }
 
   /// A library category opens the shared bare filtered-catalog screen (no nested stack).

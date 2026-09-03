@@ -20,6 +20,12 @@ final class ImageCacheTests: XCTestCase {
     let unchangedResult = await cache.refreshImage(for: url)
     let unchanged = try XCTUnwrap(unchangedResult)
     XCTAssertFalse(unchanged.contentChanged)
+    XCTAssertEqual(ImageURLProtocolStub.lastRequest?.value(forHTTPHeaderField: "Pragma"), "no-cache")
+    XCTAssertEqual(ImageURLProtocolStub.lastRequest?.value(forHTTPHeaderField: "Cache-Control"),
+                   "no-store, no-cache, must-revalidate, max-age=0")
+    let refreshQuery = try XCTUnwrap(ImageURLProtocolStub.lastRequest?.url)
+    XCTAssertNotNil(URLComponents(url: refreshQuery, resolvingAgainstBaseURL: false)?.queryItems?
+      .first(where: { $0.name == "__kp_refresh" })?.value)
 
     ImageURLProtocolStub.payload = imageData(color: .green)
     let changedResult = await cache.refreshImage(for: url)
@@ -40,11 +46,13 @@ final class ImageCacheTests: XCTestCase {
 
 private final class ImageURLProtocolStub: URLProtocol {
   static var payload = Data()
+  static var lastRequest: URLRequest?
 
   override class func canInit(with request: URLRequest) -> Bool { true }
   override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
   override func startLoading() {
+    Self.lastRequest = request
     let response = HTTPURLResponse(url: request.url!,
                                    statusCode: 200,
                                    httpVersion: "HTTP/1.1",

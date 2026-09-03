@@ -123,9 +123,19 @@ public final class ImageCache {
     let file = fileURL(for: url)
     let previousData = try? Data(contentsOf: file)
 
-    var request = URLRequest(url: url)
-    request.cachePolicy = .reloadIgnoringLocalCacheData
-    request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+    // Some CDN edges ignore client no-cache headers for an unchanged image URL. A unique query
+    // value forces revalidation while the cache key and stored file remain tied to the canonical
+    // URL supplied by the API.
+    var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+    var queryItems = components?.queryItems ?? []
+    queryItems.removeAll { $0.name == "__kp_refresh" }
+    queryItems.append(URLQueryItem(name: "__kp_refresh",
+                                   value: String(Int64(Date().timeIntervalSince1970 * 1_000))))
+    components?.queryItems = queryItems
+
+    var request = URLRequest(url: components?.url ?? url)
+    request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+    request.setValue("no-store, no-cache, must-revalidate, max-age=0", forHTTPHeaderField: "Cache-Control")
     request.setValue("no-cache", forHTTPHeaderField: "Pragma")
     guard let (data, response) = try? await session.data(for: request),
           (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? true,
