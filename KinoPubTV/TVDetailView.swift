@@ -24,6 +24,7 @@ struct TVDetailView: View {
   let id: Int
   @EnvironmentObject private var session: TVSession
   @StateObject private var model = TVDetailModel()
+  @State private var playerSource: TVPlaybackSource?
 
   var body: some View {
     ScrollView {
@@ -44,7 +45,7 @@ struct TVDetailView: View {
     .background(TVTheme.background)
     .ignoresSafeArea(edges: .top)
     .task { await model.load(id: id, session: session) }
-    .navigationDestination(for: TVPlaybackSource.self) { source in
+    .fullScreenCover(item: $playerSource) { source in
       TVPlayerView(source: source)
     }
   }
@@ -108,7 +109,9 @@ struct TVDetailView: View {
             .frame(maxWidth: 850, alignment: .leading)
 
           if let source = primaryPlaybackSource(for: item) {
-            NavigationLink(value: source) {
+            Button {
+              playerSource = source
+            } label: {
               Label(playLabel(for: item), systemImage: "play.fill")
                 .font(.headline.weight(.bold))
             }
@@ -143,7 +146,9 @@ struct TVDetailView: View {
             LazyHStack(spacing: 34) {
               ForEach(season.episodes.sorted { $0.number < $1.number }) { episode in
                 let source = TVPlaybackSource.episode(episode, season: season, item: item)
-                NavigationLink(value: source) {
+                Button {
+                  playerSource = source
+                } label: {
                   TVEpisodeCard(episode: episode)
                 }
                 .buttonStyle(.card)
@@ -208,9 +213,12 @@ private struct TVEpisodeCard: View {
 
       Text("E\(episode.number) · \(episode.fixedTitle)")
         .font(.headline)
-        .lineLimit(1)
-        .frame(width: 390, alignment: .leading)
+        .lineLimit(2)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(width: 390, alignment: .topLeading)
+        .frame(minHeight: 58, alignment: .topLeading)
     }
-    .frame(width: 390, alignment: .leading)
+    .frame(width: 390, alignment: .topLeading)
+    .frame(minHeight: 290, alignment: .topLeading)
   }
 }

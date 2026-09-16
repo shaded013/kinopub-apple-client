@@ -5,6 +5,8 @@ private enum TVBrowseLayout {
   static let horizontalInset: CGFloat = 72
   static let posterWidth: CGFloat = 300
   static let posterHeight: CGFloat = 450
+  static let posterTitleHeight: CGFloat = 70
+  static let posterCaptionHeight: CGFloat = 108
   static let posterSpacing: CGFloat = 42
   static let rowSpacing: CGFloat = 58
   static let columns = Array(
@@ -294,7 +296,8 @@ private struct TVShelf: View {
             }
           }
           .padding(.horizontal, TVBrowseLayout.horizontalInset)
-          .padding(.vertical, 26)
+          // Leave room for tvOS' focused-card scale so the caption is not clipped by the shelf.
+          .padding(.vertical, 40)
         }
       }
     }
@@ -348,13 +351,18 @@ struct TVPosterCard: View {
       Text(item.localizedTitle)
         .font(.title3.weight(.semibold))
         .lineLimit(2)
-        .frame(width: TVBrowseLayout.posterWidth, height: 68, alignment: .topLeading)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(width: TVBrowseLayout.posterWidth, alignment: .topLeading)
+        .frame(minHeight: TVBrowseLayout.posterTitleHeight, alignment: .topLeading)
 
       Text(item.year.description)
         .font(.body)
         .foregroundStyle(.secondary)
+        .lineLimit(1)
     }
-    .frame(width: TVBrowseLayout.posterWidth, alignment: .leading)
+    .frame(width: TVBrowseLayout.posterWidth, alignment: .topLeading)
+    .frame(minHeight: TVBrowseLayout.posterHeight + TVBrowseLayout.posterCaptionHeight,
+           alignment: .topLeading)
   }
 }
 
@@ -458,6 +466,7 @@ private final class TVSearchModel: ObservableObject {
   @Published var isLoadingMore = false
   @Published var pagination: Pagination?
   private var pagedQuery = ""
+  private var activeQuery = ""
 
   func search(session: TVSession) async {
     let value = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -465,20 +474,33 @@ private final class TVSearchModel: ObservableObject {
       results = []
       pagination = nil
       pagedQuery = ""
+      activeQuery = ""
+      isSearching = false
+      errorMessage = nil
       return
     }
+
+    guard !(isSearching && activeQuery == value) else { return }
+    activeQuery = value
     isSearching = true
     results = []
     pagination = nil
     pagedQuery = value
-    defer { isSearching = false }
+    errorMessage = nil
+    defer {
+      if activeQuery == value {
+        isSearching = false
+      }
+    }
     do {
       let data = try await session.searchPage(value, page: 1)
-      guard query.trimmingCharacters(in: .whitespacesAndNewlines) == value else { return }
+      guard !Task.isCancelled,
+            query.trimmingCharacters(in: .whitespacesAndNewlines) == value else { return }
       results = Self.unique(data.items)
       pagination = data.pagination
       errorMessage = nil
     } catch {
+      guard !Task.isCancelled, activeQuery == value else { return }
       errorMessage = error.localizedDescription
     }
   }
@@ -517,50 +539,105 @@ private final class TVSearchModel: ObservableObject {
 struct TVSearchView: View {
   @EnvironmentObject private var session: TVSession
   @StateObject private var model = TVSearchModel()
+  @FocusState private var isSearchFieldFocused: Bool
 
   var body: some View {
     NavigationStack {
-      ScrollView {
-        if model.results.isEmpty, !model.isSearching {
-          VStack(spacing: 18) {
-            Image(systemName: "magnifyingglass")
-              .font(.system(size: 72))
-              .foregroundStyle(TVTheme.accent)
-            Text(model.query.isEmpty ? "Search movies and series" : "No matches")
-              .font(.title2.weight(.bold))
-            Text("Use the search field above to explore the KinoPub catalogue.")
-              .foregroundStyle(.secondary)
-          }
-          .frame(maxWidth: .infinity)
-          .padding(.top, 180)
-        } else {
-          LazyVGrid(columns: TVBrowseLayout.columns, spacing: TVBrowseLayout.rowSpacing) {
-            ForEach(model.results) { item in
-              TVPosterLink(item: item) {
-                Task { await model.loadMore(after: item, session: session) }
-              }
-            }
-          }
-          .padding(.horizontal, TVBrowseLayout.horizontalInset)
-          .padding(.vertical, 46)
+      VStack(spacing: 0) {
+        HStack(spacing: 22) {
+          Image(systemName: "magnifyingglass")
+            .font(.title2.weight(.semibold))
+            .foregroundStyle(isSearchFieldFocused ? Color.black : TVTheme.accent)
 
-          if model.isSearching || model.isLoadingMore {
-            TVPageProgress(pagination: model.pagination)
+          TextField("Title, actor, director", text: $model.query)
+            .font(.title2)
+            .textFieldStyle(.plain)
+            .submitLabel(.search)
+            .focused($isSearchFieldFocused)
+            .onSubmit { runSearch() }
+            .accessibilityIdentifier("search.query")
+
+          if !model.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            Button {
+              runSearch()
+            } label: {
+              Label("Search", systemImage: "arrow.right.circle.fill")
+                .font(.headline)
+            }
+            .accessibilityIdentifier("search.submit")
           }
         }
+        .padding(.horizontal, 34)
+        .frame(maxWidth: 980, minHeight: 86)
+        .background(
+          RoundedRectangle(cornerRadius: 18, style: .continuous)
+            .fill(isSearchFieldFocused ? Color.white : TVTheme.surface)
+        )
+        .foregroundStyle(isSearchFieldFocused ? Color.black : Color.white)
+        .padding(.top, 26)
+        .padding(.bottom, 20)
 
-        if let error = model.errorMessage {
-          TVInlineError(message: error) {
-            Task { await model.search(session: session) }
+        ScrollView {
+          if model.results.isEmpty, !model.isSearching {
+            VStack(spacing: 18) {
+              Image(systemName: "magnifyingglass")
+                .font(.system(size: 72))
+                .foregroundStyle(TVTheme.accent)
+              Text(model.query.isEmpty ? "Search movies and series" : "No matches")
+                .font(.title2.weight(.bold))
+              Text(model.query.isEmpty
+                   ? "Select the search field and enter a title, actor, or director."
+                   : "Try another title, actor, or director.")
+                .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.top, 130)
+          } else {
+            LazyVGrid(columns: TVBrowseLayout.columns, spacing: TVBrowseLayout.rowSpacing) {
+              ForEach(model.results) { item in
+                TVPosterLink(item: item) {
+                  Task { await model.loadMore(after: item, session: session) }
+                }
+              }
+            }
+            .padding(.horizontal, TVBrowseLayout.horizontalInset)
+            .padding(.vertical, 46)
+
+            if model.isSearching || model.isLoadingMore {
+              TVPageProgress(pagination: model.pagination)
+            }
+          }
+
+          if let error = model.errorMessage {
+            TVInlineError(message: error) {
+              runSearch()
+            }
           }
         }
       }
       .background(TVTheme.background)
       .navigationTitle("Search")
-      .searchable(text: $model.query, prompt: "Title, actor, director")
-      .onSubmit(of: .search) { Task { await model.search(session: session) } }
       .navigationDestination(for: Int.self) { id in TVDetailView(id: id) }
+      .task(id: model.query) {
+        let value = model.query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else {
+          await model.search(session: session)
+          return
+        }
+
+        do {
+          try await Task.sleep(nanoseconds: 550_000_000)
+        } catch {
+          return
+        }
+        guard !Task.isCancelled else { return }
+        await model.search(session: session)
+      }
     }
+  }
+
+  private func runSearch() {
+    Task { await model.search(session: session) }
   }
 }
 

@@ -9,6 +9,7 @@ struct TVPlayerView: View {
   var body: some View {
     TVPlayerContainer(source: source, session: session)
       .ignoresSafeArea()
+      .toolbar(.hidden, for: .tabBar)
   }
 }
 
