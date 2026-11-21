@@ -187,6 +187,7 @@ struct TabsNavigationView: View {
                                     errorHandler: errorHandler))
     }
 #if os(iOS)
+    .environment(\.searchFooterClearance, isKeyboardVisible ? 0 : KinoBottomBarLayout.contentHeight)
     .toolbar(.hidden, for: .tabBar)
 #endif
     .tag(NavigationTabs.search)

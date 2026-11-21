@@ -21,11 +21,23 @@ private struct BookmarkTarget: Identifiable {
   var id: Int { item.id }
 }
 
+private struct SearchFooterClearanceKey: EnvironmentKey {
+  static let defaultValue: CGFloat = 0
+}
+
+extension EnvironmentValues {
+  var searchFooterClearance: CGFloat {
+    get { self[SearchFooterClearanceKey.self] }
+    set { self[SearchFooterClearanceKey.self] = newValue }
+  }
+}
+
 struct SearchView: View {
   @EnvironmentObject var navigationState: NavigationState
   @EnvironmentObject var authState: AuthState
   @EnvironmentObject var errorHandler: ErrorHandler
   @Environment(\.appContext) var appContext
+  @Environment(\.searchFooterClearance) private var footerClearance
   @StateObject private var model: SearchModel
 
 #if os(iOS)
@@ -50,13 +62,17 @@ struct SearchView: View {
     NavigationStack(path: $navigationState.searchRoutes) {
       WidthReader { width in
         ScrollView {
-          if trimmedQuery.isEmpty {
-            discoveryContent
-          } else if committed {
-            sections(width: width)
-          } else {
-            liveList
+          Group {
+            if trimmedQuery.isEmpty {
+              discoveryContent
+            } else if committed {
+              sections(width: width)
+            } else {
+              liveList
+            }
           }
+          // The enclosing TabView doesn't always pass its floating footer inset to Search.
+          .padding(.bottom, footerClearance)
         }
         // The field stays pinned at the very top while content scrolls *under* it (Apple-style),
         // and there's no "Search" page title — the glass field is the header.
@@ -607,6 +623,7 @@ private struct BookmarkActionSheet: View {
 struct MediaListGridView: View {
   let items: [MediaItem]
   let title: String
+  @Environment(\.searchFooterClearance) private var footerClearance
 
   var body: some View {
     WidthReader { width in
@@ -622,6 +639,7 @@ struct MediaListGridView: View {
           }
         }
         .padding(16)
+        .padding(.bottom, footerClearance)
       }
     }
     .kinoScreen(title)
@@ -633,6 +651,7 @@ struct MediaListGridView: View {
 struct SearchCastCrewView: View {
   let people: [SearchPerson]
   let title: String
+  @Environment(\.searchFooterClearance) private var footerClearance
 
   private let columns = [GridItem(.adaptive(minimum: 100), spacing: 14, alignment: .top)]
 
@@ -650,6 +669,7 @@ struct SearchCastCrewView: View {
         }
       }
       .padding(16)
+      .padding(.bottom, footerClearance)
     }
     .kinoScreen(title)
   }
