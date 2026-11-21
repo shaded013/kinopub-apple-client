@@ -25,14 +25,6 @@ struct MainView: View {
     _catalog = StateObject(wrappedValue: catalog())
   }
   
-  var toolbarItemPlacement: ToolbarItemPlacement {
-#if os(iOS)
-    .topBarTrailing
-#elseif os(macOS)
-    .navigation
-#endif
-  }
-  
   var body: some View {
     NavigationStack(path: $path) {
       VStack {
@@ -46,21 +38,10 @@ struct MainView: View {
       .kinoScreen(catalog.title.localized)
       .moreBackButton()
       .toolbar {
-        ToolbarItem(placement: toolbarItemPlacement) {
-          Button {
-            showShortCutPicker = true
-          } label: {
-            SortDotIcon(active: catalog.isSortNonDefault)
-          }
-        }
-
-        ToolbarItem(placement: toolbarItemPlacement) {
-          Button {
-            showFilterPicker = true
-          } label: {
-            FilterBadgeIcon(count: catalog.activeFilterCount)
-          }
-        }
+        CatalogToolbar(isSortActive: catalog.isSortNonDefault,
+                       filterCount: catalog.activeFilterCount,
+                       onSort: { showShortCutPicker = true },
+                       onFilter: { showFilterPicker = true })
       }
       .background(Color.KinoPub.background)
       .sheet(isPresented: $showShortCutPicker, content: {
@@ -137,14 +118,6 @@ struct FilteredCatalogView: View {
     self.linkProvider = linkProvider
   }
 
-  private var toolbarItemPlacement: ToolbarItemPlacement {
-#if os(iOS)
-    .topBarTrailing
-#elseif os(macOS)
-    .navigation
-#endif
-  }
-
   // Lands on the actual section catalog (e.g. Serials) pre-filtered, with the section's own
   // sort/filter/search chrome — a deep link into the section, not a one-off page.
   var body: some View {
@@ -161,16 +134,10 @@ struct FilteredCatalogView: View {
     .kinoScreen(catalog.title.localized)
     .moreBackButton()
     .toolbar {
-      ToolbarItem(placement: toolbarItemPlacement) {
-        Button { showShortCutPicker = true } label: {
-          SortDotIcon(active: catalog.isSortNonDefault)
-        }
-      }
-      ToolbarItem(placement: toolbarItemPlacement) {
-        Button { showFilterPicker = true } label: {
-          FilterBadgeIcon(count: catalog.activeFilterCount)
-        }
-      }
+      CatalogToolbar(isSortActive: catalog.isSortNonDefault,
+                     filterCount: catalog.activeFilterCount,
+                     onSort: { showShortCutPicker = true },
+                     onFilter: { showFilterPicker = true })
     }
     .sheet(isPresented: $showShortCutPicker) {
       SortSelectionView(sort: $catalog.sort)
@@ -271,6 +238,55 @@ struct PersonSearchView: View {
 
 // MARK: - Toolbar indicators
 
+private struct CatalogToolbar: ToolbarContent {
+  let isSortActive: Bool
+  let filterCount: Int
+  let onSort: () -> Void
+  let onFilter: () -> Void
+
+  private var placement: ToolbarItemPlacement {
+#if os(iOS)
+    .topBarTrailing
+#elseif os(macOS)
+    .navigation
+#endif
+  }
+
+  var body: some ToolbarContent {
+    ToolbarItem(placement: placement) {
+      Button(action: onSort) {
+        iconTarget(SortDotIcon(active: isSortActive))
+      }
+      .accessibilityLabel("Sort".localized)
+      .accessibilityIdentifier("catalog.sort")
+    }
+#if os(iOS) && compiler(>=6.2)
+    if #available(iOS 26.0, *) {
+      ToolbarSpacer(.fixed, placement: .topBarTrailing)
+    }
+#endif
+    ToolbarItem(placement: placement) {
+      Button(action: onFilter) {
+        iconTarget(FilterBadgeIcon(count: filterCount))
+      }
+      .accessibilityLabel("Filter".localized)
+      .accessibilityValue(filterCount > 0 ? filterCount.formatted() : "")
+      .accessibilityIdentifier("catalog.filter")
+    }
+  }
+
+  @ViewBuilder
+  private func iconTarget<Content: View>(_ content: Content) -> some View {
+#if os(iOS)
+    content
+      .frame(width: 44, height: 44)
+      .contentShape(Rectangle())
+#else
+    content
+#endif
+  }
+}
+
 /// Filter icon with a count badge when filters are active. iOS 26+ uses the system `.badge`
 /// (not clipped by the toolbar group); older OSes fall back to a corner overlay. No padding
 /// is applied to the icon itself, so the toolbar icons keep their native alignment.
@@ -279,19 +295,19 @@ private struct FilterBadgeIcon: View {
   var body: some View {
     if #available(iOS 26.0, macOS 26.0, *) {
       Image(systemName: "line.3.horizontal.decrease.circle")
-        .foregroundStyle(count > 0 ? Color.KinoPub.accent : Color.KinoPub.text)
+        .foregroundStyle(Color.KinoPub.text)
         .modifier(SystemCountBadge(count: count))
     } else {
       ZStack(alignment: .topTrailing) {
         Image(systemName: "line.3.horizontal.decrease.circle")
-          .foregroundStyle(count > 0 ? Color.KinoPub.accent : Color.KinoPub.text)
+          .foregroundStyle(Color.KinoPub.text)
         if count > 0 {
           Text("\(count)")
             .font(.system(size: 11, weight: .bold))
-            .foregroundStyle(.white)
+            .foregroundStyle(Color.black)
             .padding(.horizontal, count >= 10 ? 3 : 0)
             .frame(minWidth: 14, minHeight: 14)
-            .background(Capsule(style: .continuous).fill(Color.KinoPub.accent))
+            .background(Capsule(style: .continuous).fill(Color.KinoPub.text))
             .offset(x: 6, y: -6)
         }
       }

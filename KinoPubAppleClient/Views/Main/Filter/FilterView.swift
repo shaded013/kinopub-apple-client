@@ -43,26 +43,81 @@ struct FilterView: View {
       .scrollContentBackground(.hidden)
       .background(Color.KinoPub.background)
       .navigationTitle("Filter".localized)
-      #if os(iOS)
+#if os(iOS)
       .navigationBarTitleDisplayMode(.inline)
-      #endif
+      .safeAreaInset(edge: .bottom, spacing: 0) {
+        filterActions
+      }
       .toolbar {
-        ToolbarItem(placement: .cancellationAction) {
-          Button("Clear".localized, role: .destructive) {
-            model.clear()
-            onClear()
+        ToolbarItem(placement: .topBarLeading) {
+          Button {
             dismiss()
+          } label: {
+            Text("Cancel".localized)
+              .foregroundStyle(Color.KinoPub.text)
+              .frame(minHeight: 48)
           }
-        }
-        ToolbarItem(placement: .confirmationAction) {
-          Button("Apply".localized) {
-            onApply(model.makeFilter())
-            dismiss()
-          }
+          .tint(Color.KinoPub.text)
+          .accessibilityIdentifier("catalog.filter.cancel")
         }
       }
+#else
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) {
+          Button("Clear".localized, role: .destructive, action: clearFilters)
+        }
+        ToolbarItem(placement: .confirmationAction) {
+          Button("Apply".localized, action: applyFilters)
+        }
+      }
+#endif
     }
     .presentationDetents([.medium, .large])
+  }
+
+#if os(iOS)
+  private var filterActions: some View {
+    HStack(spacing: 12) {
+      Button(action: clearFilters) {
+        Text("Clear".localized)
+          .foregroundStyle(Color.KinoPub.text)
+          .frame(minWidth: 48, minHeight: 48)
+          .contentShape(Rectangle())
+      }
+      .accessibilityIdentifier("catalog.filter.clear")
+
+      Spacer(minLength: 0)
+
+      Button(action: applyFilters) {
+        Text("Apply".localized)
+          .foregroundStyle(Color.black)
+          .padding(.horizontal, 18)
+          .frame(minWidth: 48, minHeight: 48)
+          .background(
+            Color(red: 107.0 / 255.0, green: 199.0 / 255.0, blue: 136.0 / 255.0),
+            in: RoundedRectangle(cornerRadius: 12)
+          )
+          .contentShape(Rectangle())
+      }
+      .accessibilityIdentifier("catalog.filter.apply")
+    }
+    .font(.body.weight(.semibold))
+    .buttonStyle(.plain)
+    .padding(.horizontal, 20)
+    .padding(.vertical, 8)
+    .background(Color(white: 0.13))
+  }
+#endif
+
+  private func clearFilters() {
+    model.clear()
+    onClear()
+    dismiss()
+  }
+
+  private func applyFilters() {
+    onApply(model.makeFilter())
+    dismiss()
   }
 
   // MARK: - Genre / Country
