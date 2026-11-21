@@ -23,12 +23,24 @@ struct HistoryView: View {
 
   var body: some View {
     NavigationStack(path: $navigationState.historyRoutes) {
-      historyList
-      .kinoScreen("History".localized)
-      .routeDestinations()
-      .handleError(state: $errorHandler.state)
-      .toast(message: $catalog.toastMessage)
+      historyScreen
+        .routeDestinations()
+        .handleError(state: $errorHandler.state)
+        .toast(message: $catalog.toastMessage)
     }
+  }
+
+  private var historyScreen: some View {
+    #if os(iOS)
+    // Avoid the large-title stretch during pull-to-refresh.
+    historyList
+      .navigationTitle("History".localized)
+      .background(Color.KinoPub.background)
+      .navigationBarTitleDisplayMode(.inline)
+      .navBarBlurBackground()
+    #else
+    historyList.kinoScreen("History".localized)
+    #endif
   }
 
   // MARK: - Filter tabs
@@ -52,16 +64,14 @@ struct HistoryView: View {
     GeometryReader { geometryProxy in
       if catalog.isLoadingSkeleton {
         skeletonList(width: geometryProxy.size.width)
-      } else if catalog.groupedSections.isEmpty {
-        emptyState
       } else {
-        groupedList(width: geometryProxy.size.width)
+        groupedList(size: geometryProxy.size)
       }
     }
   }
 
   func skeletonList(width: CGFloat) -> some View {
-    ContentItemsListView(width: width, items: $catalog.items, onLoadMoreContent: { _ in
+    ContentItemsListView(width: width, items: .constant(catalog.skeletonItems), onLoadMoreContent: { _ in
     }, onRefresh: {
       await catalog.refresh()
     }, navigationLinkProvider: { item in
@@ -69,41 +79,46 @@ struct HistoryView: View {
     }, statusOverlay: { AnyView(MediaCardStatusBadge(item: $0)) })
   }
 
-  func groupedList(width: CGFloat) -> some View {
+  func groupedList(size: CGSize) -> some View {
     ScrollView {
-      // Chips scroll with the content so the large title collapses.
       if !catalog.availableTypes.isEmpty {
         filterTabs
           .padding(.bottom, 4)
       }
-      LazyVStack(spacing: 24, pinnedViews: [.sectionHeaders]) {
-        ForEach(catalog.groupedSections) { section in
-          Section {
-            LazyVGrid(columns: gridLayout(width: width), spacing: 24) {
-              ForEach(section.items, id: \.uniqueID) { historyItem in
-                NavigationLink(value: RouteLinkProvider().link(for: historyItem.item)) {
-                  HistoryItemCell(historyItem: historyItem)
-                    .onAppear {
-                      catalog.loadMoreContent(after: historyItem.item)
+      let sections = catalog.groupedSections
+      if sections.isEmpty {
+        emptyState
+          .frame(minHeight: size.height)
+      } else {
+        LazyVStack(spacing: 24, pinnedViews: [.sectionHeaders]) {
+          ForEach(sections) { section in
+            Section {
+              LazyVGrid(columns: gridLayout(width: size.width), spacing: 24) {
+                ForEach(section.items, id: \.uniqueID) { historyItem in
+                  NavigationLink(value: RouteLinkProvider().link(for: historyItem.item)) {
+                    HistoryItemCell(historyItem: historyItem)
+                      .onAppear {
+                        catalog.loadMoreContent(after: historyItem)
+                      }
+                  }
+                  .buttonStyle(.plain)
+                  .contextMenu {
+                    Button(role: .destructive) {
+                      catalog.removeFromHistory(historyItem)
+                    } label: {
+                      Label("Remove from history".localized, systemImage: "trash")
                     }
-                }
-                .buttonStyle(.plain)
-                .contextMenu {
-                  Button(role: .destructive) {
-                    catalog.removeFromHistory(historyItem)
-                  } label: {
-                    Label("Remove from history".localized, systemImage: "trash")
                   }
                 }
               }
+              .padding(.horizontal, 20)
+            } header: {
+              sectionHeader(section.title)
             }
-            .padding(.horizontal, 20)
-          } header: {
-            sectionHeader(section.title)
           }
         }
+        .padding(.top, 8)
       }
-      .padding(.top, 8)
     }
     .refreshable {
       await catalog.refresh()

@@ -18,11 +18,14 @@ class HistoryModel: ObservableObject {
   private var authState: AuthState
   private var errorHandler: ErrorHandler
   private var contentService: VideoContentService
-  private var bag = Set<AnyCancellable>()
+  private var authSubscription: AnyCancellable?
+  private var refreshTask: Task<Void, Never>?
+  private var pageRequestID: UUID?
 
-  @Published public var items: [MediaItem] = MediaItem.skeletonMock()
-  @Published public var historyItems: [HistoryItem] = []
-  @Published public var pagination: Pagination?
+  let skeletonItems = MediaItem.skeletonMock()
+  @Published private(set) var isLoadingSkeleton = true
+  @Published private(set) var historyItems: [HistoryItem] = []
+  private var pagination: Pagination?
   @Published public var selectedType: MediaType?
   @Published public var toastMessage: ToastMessage?
 
@@ -31,15 +34,10 @@ class HistoryModel: ObservableObject {
     self.authState = authState
     self.errorHandler = errorHandler
     // Load on creation, not via the view's `.task` (unreliable in a compact split view / nested stack).
-    Task { await fetchItems() }
+    Task { await refresh() }
   }
 
   // MARK: - Derived state (filtering + day grouping)
-
-  /// Whether the screen is still showing the initial skeleton placeholders.
-  var isLoadingSkeleton: Bool {
-    items.first(where: { $0.skeleton ?? false }) != nil
-  }
 
   /// Media types present in the loaded history, in `MediaType.allCases` order. Used to build the filter pills.
   var availableTypes: [MediaType] {
@@ -75,44 +73,68 @@ class HistoryModel: ObservableObject {
       }
   }
 
-  func fetchItems() async {
+  @Sendable @MainActor
+  func refresh() async {
     guard authState.userState == .authorized else {
       subscribeForAuth()
       return
     }
+    if let refreshTask {
+      await refreshTask.value
+      return
+    }
+
+    pageRequestID = nil
+    // SwiftUI can cancel its refresh action while the pull gesture is still settling.
+    // Keep the request alive in the model so the next page-one response can update the list.
+    let task = Task { await fetchFirstPage() }
+    refreshTask = task
+    await task.value
+  }
+
+  private func fetchFirstPage() async {
+    if !isLoadingSkeleton, errorHandler.state.showError { errorHandler.reset() }
+    defer {
+      refreshTask = nil
+      if isLoadingSkeleton { isLoadingSkeleton = false }
+    }
 
     do {
-      let page = pagination != nil ? pagination!.current + 1 : nil
-      let data = try await contentService.fetchHistory(page: page)
-      handleData(data)
+      let data = try await contentService.fetchHistory(page: nil)
+      try Task.checkCancellation()
+      historyItems = data.history
+      pagination = data.pagination
+      if let selectedType, !availableTypes.contains(selectedType) {
+        self.selectedType = nil
+      }
     } catch {
+      guard !Task.isCancelled, !error.isCancellationError else { return }
       Logger.app.debug("fetch history error: \(error)")
       errorHandler.setError(error)
     }
   }
 
-  private func handleData(_ data: HistoryData) {
-    let newItems = data.history.map { $0.item }
-    if isLoadingSkeleton {
-      items = newItems
-      historyItems = data.history
-    } else {
-      items.append(contentsOf: newItems)
-      historyItems.append(contentsOf: data.history)
-    }
-    pagination = data.pagination
-  }
+  func loadMoreContent(after item: HistoryItem) {
+    guard authState.userState == .authorized, refreshTask == nil, pageRequestID == nil,
+          let pagination, pagination.current < pagination.total,
+          filteredHistoryItems.last?.uniqueID == item.uniqueID else { return }
 
-  func loadMoreContent(after item: MediaItem) {
-    guard let pagination = pagination else {
-      return
-    }
-
-    let thresholdIndex = self.items.index(self.items.endIndex, offsetBy: -1)
-    if thresholdIndex == self.items.firstIndex(of: item), pagination.current <= pagination.total {
-      Logger.app.debug("load more history after item: \(item.id)")
-      Task {
-        await fetchItems()
+    let requestID = UUID()
+    pageRequestID = requestID
+    Task {
+      defer {
+        if pageRequestID == requestID { pageRequestID = nil }
+      }
+      do {
+        let data = try await contentService.fetchHistory(page: pagination.current + 1)
+        guard pageRequestID == requestID, !Task.isCancelled else { return }
+        var seen = Set(historyItems.map(\.uniqueID))
+        historyItems.append(contentsOf: data.history.filter { seen.insert($0.uniqueID).inserted })
+        self.pagination = data.pagination
+      } catch {
+        guard pageRequestID == requestID, !Task.isCancelled, !error.isCancellationError else { return }
+        Logger.app.debug("load more history error: \(error)")
+        errorHandler.setError(error)
       }
     }
   }
@@ -122,7 +144,6 @@ class HistoryModel: ObservableObject {
   func removeFromHistory(_ historyItem: HistoryItem) {
     let itemId = historyItem.item.id
     historyItems.removeAll { $0.item.id == itemId }
-    items.removeAll { $0.id == itemId }
     // Also drop any locally-tracked progress so the title disappears from Continue Watching too.
     AppContext.shared.localProgressStore.clear(id: itemId)
     Task {
@@ -140,22 +161,14 @@ class HistoryModel: ObservableObject {
     }
   }
 
-  @Sendable @MainActor
-  func refresh() async {
-    items = MediaItem.skeletonMock()
-    historyItems = []
-    pagination = nil
-    errorHandler.reset()
-    Logger.app.debug("refetch history")
-    await fetchItems()
-  }
-
   private func subscribeForAuth() {
-    authState.$userState.filter({ $0 == .authorized }).first().sink { [weak self] _ in
-      Task {
+    guard authSubscription == nil else { return }
+    authSubscription = authState.$userState.filter({ $0 == .authorized }).first().sink { [weak self] _ in
+      Task { [weak self] in
+        self?.authSubscription = nil
         await self?.refresh()
       }
-    }.store(in: &bag)
+    }
   }
 
 }
