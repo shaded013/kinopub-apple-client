@@ -2,10 +2,9 @@
 //  SearchView.swift
 //  KinoPubAppleClient
 //
-//  Apple-TV-style search: a full-width field in the content (auto-focused), a live results LIST while
+//  Apple-TV-style search: a full-width field in the content, a live results list while
 //  typing, and sectioned shelves (Top Results / Movies / TV Shows / Cast & Crew) once committed.
-//  "Committed" = keyboard down (the field lost focus via Return or tapping a suggestion); editing the
-//  query brings the live list back.
+//  Submitting or choosing a suggestion commits the query. Dismissing the keyboard keeps the list.
 //
 
 import SwiftUI
@@ -44,8 +43,8 @@ struct SearchView: View {
   @State private var searchFocused = false
 #else
   @FocusState private var searchFocused: Bool
-#endif
   @State private var didAutoFocus = false
+#endif
   @State private var bookmarkTarget: BookmarkTarget?
   /// True after the user commits a search (Return or tapping a suggestion) → show the sectioned
   /// layout. It is NOT tied to raw focus: incidental focus loss (opening a row's "…" menu, scrolling)
@@ -74,6 +73,13 @@ struct SearchView: View {
           // The enclosing TabView doesn't always pass its floating footer inset to Search.
           .padding(.bottom, footerClearance)
         }
+#if os(iOS)
+        .contentShape(Rectangle())
+        .simultaneousGesture(
+          TapGesture().onEnded { searchFocused = false },
+          including: searchFocused ? .all : .none)
+        .scrollDismissesKeyboard(.interactively)
+#endif
         // The field stays pinned at the very top while content scrolls *under* it (Apple-style),
         // and there's no "Search" page title — the glass field is the header.
         .safeAreaInset(edge: .top, spacing: 0) {
@@ -96,11 +102,15 @@ struct SearchView: View {
       // does NOT (that's what keeps a row from disappearing when you tap its "…").
       .onChange(of: searchFocused) { focused in if focused { committed = false } }
       .task { await model.loadGenres() }
+#if os(iOS)
+      .onDisappear { searchFocused = false }
+#else
       .onAppear {
         guard !didAutoFocus else { return }
         didAutoFocus = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { searchFocused = true }
       }
+#endif
       .sheet(item: $bookmarkTarget) { target in
         BookmarkActionSheet(item: target.item, actionsService: appContext.actionsService)
       }
@@ -110,6 +120,27 @@ struct SearchView: View {
   // MARK: - Search field
 
   private var searchField: some View {
+    HStack(spacing: 6) {
+      searchInput
+#if os(iOS)
+      if searchFocused {
+        Button {
+          searchFocused = false
+        } label: {
+          Image(systemName: "keyboard.chevron.compact.down")
+            .font(.system(size: 19, weight: .medium))
+            .foregroundStyle(Color.KinoPub.text)
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text("Hide Keyboard"))
+      }
+#endif
+    }
+  }
+
+  private var searchInput: some View {
     HStack(spacing: 8) {
       Image(systemName: "magnifyingglass").foregroundStyle(Color.KinoPub.subtitle)
 #if os(iOS)
